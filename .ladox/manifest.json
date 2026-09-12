@@ -1,0 +1,324 @@
+{
+  "version": "1.0",
+  "topology": {
+    "contexts": [
+      {
+        "name": "authentication",
+        "path_prefix": "artifacts/api-server/src/lib",
+        "entities": ["organisation", "member", "audit_entry"],
+        "guards": ["auth-session"]
+      },
+      {
+        "name": "imports-and-pipeline",
+        "path_prefix": "artifacts/api-server/src/lib",
+        "entities": ["import", "row", "exception", "run"],
+        "guards": ["auth-session", "idempotency-key"]
+      },
+      {
+        "name": "approvals-and-audit",
+        "path_prefix": "artifacts/api-server/src/routes",
+        "entities": ["summary", "action_request", "approval", "audit_entry"],
+        "guards": ["auth-session", "llm-json-validation", "llm-timeout"]
+      },
+      {
+        "name": "inbound-events",
+        "path_prefix": "artifacts/api-server/src/routes",
+        "entities": ["organisation", "inbound_event", "audit_entry"],
+        "guards": [
+          "auth-session",
+          "idempotency-key",
+          "webhook-replay-protection",
+          "service-role-isolation"
+        ]
+      }
+    ],
+    "erd_diagrams": [
+      {
+        "name": "authentication",
+        "diagram": "erDiagram\n  organisation ||--o{ member : contains\n  organisation ||--o{ audit_entry : records\n  member ||--o{ audit_entry : performs"
+      },
+      {
+        "name": "imports-and-pipeline",
+        "diagram": "erDiagram\n  organisation ||--o{ import : owns\n  organisation ||--o{ run : owns\n  import ||--o{ row : contains\n  import ||--o{ run : materializes\n  run ||--o{ exception : reports"
+      },
+      {
+        "name": "approvals-and-audit",
+        "diagram": "erDiagram\n  run ||--o| summary : produces\n  run ||--o{ action_request : supports\n  action_request ||--o| approval : receives\n  organisation ||--o{ audit_entry : records"
+      },
+      {
+        "name": "inbound-events",
+        "diagram": "erDiagram\n  organisation ||--o{ inbound_event : receives\n  organisation ||--o{ audit_entry : records\n  inbound_event ||--o{ audit_entry : emits"
+      }
+    ],
+    "sequence_diagrams": [
+      {
+        "name": "import-run-lifecycle",
+        "diagram": "sequenceDiagram\n  participant Analyst\n  participant API\n  participant Storage\n  participant Pipeline\n  participant Postgres\n  Analyst->>API: Request upload URL\n  API->>Storage: Create signed upload URL\n  Analyst->>Storage: Upload CSV or JSON\n  Analyst->>API: Create run with idempotency key\n  API->>Postgres: Insert or reuse run\n  Analyst->>API: Process run\n  API->>Pipeline: Claim and validate run\n  Pipeline->>Storage: Download object\n  Pipeline->>Postgres: Store import, rows, exceptions, and audit entry"
+      },
+      {
+        "name": "signed-event-intake",
+        "diagram": "sequenceDiagram\n  participant Sender\n  participant API\n  participant Postgres\n  participant Processor\n  Sender->>API: POST signed event with timestamp\n  API->>API: Validate HMAC and freshness\n  API->>Postgres: Insert unique inbound event and audit entry\n  API-->>Sender: 202 Accepted\n  API->>Processor: Apply event asynchronously\n  Processor->>Postgres: Mark event processed"
+      },
+      {
+        "name": "approval-flow",
+        "diagram": "sequenceDiagram\n  participant Analyst\n  participant API\n  participant Administrator\n  participant Postgres\n  Analyst->>API: Request controlled action\n  API->>Postgres: Store request and audit entry\n  Administrator->>API: Approve or reject with reason\n  API->>Postgres: Lock action and reject self-approval\n  API->>Postgres: Atomically store decision, effect, and audit entry"
+      }
+    ]
+  },
+  "entities": {
+    "organisation": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "retentionDays": { "type": "integer" },
+        "requireApproval": { "type": "boolean" }
+      }
+    },
+    "member": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "clerkUserId": { "type": "string" },
+        "role": { "type": "string" }
+      }
+    },
+    "import": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "uploadedByMemberId": { "type": "string", "format": "uuid" },
+        "objectPath": { "type": "string" },
+        "contentHash": { "type": "string" }
+      }
+    },
+    "row": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "importId": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid" },
+        "rowNumber": { "type": "integer" },
+        "accepted": { "type": "boolean" },
+        "data": { "type": "object" }
+      }
+    },
+    "exception": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid" },
+        "rowId": { "type": "string", "format": "uuid" },
+        "code": { "type": "string" },
+        "severity": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "createdByMemberId": { "type": "string", "format": "uuid" },
+        "importId": { "type": "string", "format": "uuid" },
+        "objectPath": { "type": "string" },
+        "status": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "summaryStatus": { "type": "string" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid" },
+        "riskLevel": { "type": "string" },
+        "findings": { "type": "array" },
+        "model": { "type": "string" },
+        "promptVersion": { "type": "string" }
+      }
+    },
+    "action_request": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid" },
+        "requestedByMemberId": { "type": "string", "format": "uuid" },
+        "decidedByMemberId": { "type": "string", "format": "uuid" },
+        "actionType": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "actionRequestId": { "type": "string", "format": "uuid" },
+        "decidedByMemberId": { "type": "string", "format": "uuid" },
+        "decision": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "inbound_event": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "deliveryId": { "type": "string" },
+        "source": { "type": "string" },
+        "externalId": { "type": "string" },
+        "eventType": { "type": "string" },
+        "payload": { "type": "object" },
+        "processedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "audit_entry": {
+      "type": "object",
+      "x-persistence": "postgres",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "organisationId": { "type": "string", "format": "uuid" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "actor": { "type": "string" },
+        "role": { "type": "string" },
+        "metadata": { "type": "object" }
+      }
+    }
+  },
+  "contracts": [
+    {
+      "path": "/api/me",
+      "method": "GET",
+      "validator": "member",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/dashboard",
+      "method": "GET",
+      "validator": "run",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/runs",
+      "method": "GET",
+      "validator": "run",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/runs",
+      "method": "POST",
+      "validator": "run",
+      "guards": ["auth-session", "idempotency-key"]
+    },
+    {
+      "path": "/api/runs/:runId",
+      "method": "GET",
+      "validator": "run",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/runs/:runId/process",
+      "method": "POST",
+      "validator": "run",
+      "guards": ["auth-session", "idempotency-key"]
+    },
+    {
+      "path": "/api/runs/:runId/exceptions",
+      "method": "GET",
+      "validator": "exception",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/runs/:runId/summary",
+      "method": "GET",
+      "validator": "summary",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/runs/:runId/summary",
+      "method": "POST",
+      "validator": "summary",
+      "guards": ["auth-session", "llm-json-validation", "llm-timeout"]
+    },
+    {
+      "path": "/api/actions",
+      "method": "GET",
+      "validator": "action_request",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/actions",
+      "method": "POST",
+      "validator": "action_request",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/actions/:actionId/approve",
+      "method": "POST",
+      "validator": "approval",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/actions/:actionId/reject",
+      "method": "POST",
+      "validator": "approval",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/audit",
+      "method": "GET",
+      "validator": "audit_entry",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/settings",
+      "method": "GET",
+      "validator": "organisation",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/settings",
+      "method": "PATCH",
+      "validator": "organisation",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/storage/uploads/request-url",
+      "method": "POST",
+      "validator": "import",
+      "guards": ["auth-session"]
+    },
+    {
+      "path": "/api/jobs/process-imports",
+      "method": "POST",
+      "validator": "run",
+      "guards": ["idempotency-key", "service-role-isolation"]
+    },
+    {
+      "path": "/api/webhooks/inbound",
+      "method": "POST",
+      "validator": "inbound_event",
+      "guards": ["auth-session", "webhook-replay-protection"]
+    }
+  ]
+}
