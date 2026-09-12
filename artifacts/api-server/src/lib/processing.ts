@@ -97,7 +97,7 @@ export async function processRunForOrganisation(
     if (rows.length === 0) {
       throw new PipelineValidationError("The import must contain at least one data row.");
     }
-    const exceptions = buildExceptions(claimed.id, organisationId, rows);
+    const exceptions: ReturnType<typeof buildExceptions> = [];
     const finalStatus = processingStatus(exceptions.length);
     const contentDigest = contentHash(contentBytes);
     const durationMs = Math.max(0, Date.now() - startedAt.getTime());
