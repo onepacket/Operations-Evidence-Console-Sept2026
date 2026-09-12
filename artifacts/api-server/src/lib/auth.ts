@@ -11,6 +11,10 @@ import {
   type Member,
   type Organisation,
 } from "@workspace/db";
+import {
+  hasOperationsRole,
+  isAuthenticated,
+} from "./authPolicy";
 
 export type OperationsContext = {
   member: Member;
@@ -29,7 +33,7 @@ export async function requireOperationsAuth(
   const auth = getAuth(req);
   const userId = auth.userId;
 
-  if (!userId) {
+  if (!isAuthenticated(userId)) {
     res.status(401).json({ error: "Authentication required" });
     return;
   }
@@ -83,7 +87,7 @@ export function requireRole(
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req, res, next) => {
     const context = (req as AuthenticatedRequest).operationsContext;
-    if (!context || !roles.includes(context.member.role)) {
+    if (!context || !hasOperationsRole(context.member.role, roles)) {
       res.status(403).json({ error: "This role cannot perform that action" });
       return;
     }

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { and, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import {
   auditEventsTable,
@@ -10,16 +9,18 @@ import {
   type Member,
 } from "@workspace/db";
 import { ObjectStorageService } from "./objectStorage";
+import { contentHash, MAX_PROCESSING_RETRIES } from "./processingPolicy";
 import {
   buildExceptions,
   buildStoredRows,
   MAX_UPLOAD_BYTES,
   parseRecords,
+  processingStatus,
   PipelineValidationError,
 } from "./importValidation";
 
 const storage = new ObjectStorageService();
-const MAX_RETRIES = 3;
+const MAX_RETRIES = MAX_PROCESSING_RETRIES;
 const STUCK_RUN_AFTER_MS = 5 * 60 * 1000;
 
 type ProcessingActor = Pick<Member, "id" | "name" | "role">;
@@ -92,8 +93,8 @@ export async function processRunForOrganisation(
       throw new PipelineValidationError("The import must contain at least one data row.");
     }
     const exceptions = buildExceptions(claimed.id, organisationId, rows);
-    const finalStatus = exceptions.length > 0 ? "partial" : "succeeded";
-    const contentHash = createHash("sha256").update(contentBytes).digest("hex");
+    const finalStatus = processingStatus(exceptions.length);
+    const contentDigest = contentHash(contentBytes);
     const durationMs = Math.max(0, Date.now() - startedAt.getTime());
 
     await db.transaction(async (tx) => {
@@ -110,7 +111,7 @@ export async function processRunForOrganisation(
         eq(runsTable.startedAt, startedAt),
       )).returning({ id: runsTable.id });
       if (!ownedRun) return;
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${organisationId}:${contentHash}`}))`);
+       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${organisationId}:${contentDigest}`}))`);
       const [insertedImport] = await tx.insert(importsTable).values({
             organisationId,
             uploadedByMemberId: claimed.createdByMemberId,
@@ -118,7 +119,7 @@ export async function processRunForOrganisation(
             contentType: claimed.fileType,
             fileSize: actualSize,
             objectPath: claimed.objectPath,
-            contentHash,
+            contentHash: contentDigest,
           }).onConflictDoNothing({
             target: [importsTable.organisationId, importsTable.contentHash],
           }).returning();
@@ -126,7 +127,7 @@ export async function processRunForOrganisation(
         ? [insertedImport]
         : await tx.select().from(importsTable).where(and(
             eq(importsTable.organisationId, organisationId),
-            eq(importsTable.contentHash, contentHash),
+            eq(importsTable.contentHash, contentDigest),
           )).limit(1);
       await tx.delete(validationExceptionsTable).where(eq(validationExceptionsTable.runId, claimed.id));
       let storedRows = await tx.select().from(importRowsTable).where(and(
@@ -165,7 +166,7 @@ export async function processRunForOrganisation(
         entityId: claimed.id,
         actor: actor.name,
         role: actor.role,
-        metadata: { recordCount: rows.length, exceptionCount: exceptions.length, status: finalStatus, startedAt: startedAt.toISOString(), durationMs, contentHash, reusedImport: !insertedImport },
+            metadata: { recordCount: rows.length, exceptionCount: exceptions.length, status: finalStatus, startedAt: startedAt.toISOString(), durationMs, contentHash: contentDigest, reusedImport: !insertedImport },
       });
     });
   } catch (error) {

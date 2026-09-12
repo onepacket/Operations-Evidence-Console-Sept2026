@@ -2,6 +2,10 @@ import { z } from "zod";
 
 export const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 
+export function processingStatus(exceptionCount: number): "succeeded" | "partial" {
+  return exceptionCount > 0 ? "partial" : "succeeded";
+}
+
 export type InputRow = Record<string, unknown>;
 
 export type ValidationException = {

@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "seed": "tsx ./src/seed.ts",
+    "reset": "tsx ./src/seed.ts reset",
     "demo:inbound": "tsx ./src/demo-inbound-events.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

@@ -1,0 +1,3 @@
+record_id,email,amount,effective_date
+clean-001,owner.one@example.com,1250.00,2025-01-01
+clean-002,owner.two@example.com,875.50,2025-01-02

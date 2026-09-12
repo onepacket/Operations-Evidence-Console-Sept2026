@@ -1,4 +1,3 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   Router,
@@ -28,17 +27,15 @@ import {
 import { recordInboundRefusal } from "../lib/inboundAudit";
 import { applyInboundDelivery } from "../lib/inboundProcessing";
 import { logger } from "../lib/logger";
+import {
+  buildInboundSignature,
+  inboundDeliveryKey,
+  isFreshInboundTimestamp,
+  isOrganisationId,
+  signaturesMatch,
+} from "../lib/inboundPolicy";
 
 const router: IRouter = Router();
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return (
-    leftBuffer.length === rightBuffer.length &&
-    timingSafeEqual(leftBuffer, rightBuffer)
-  );
-}
 
 function getRawBody(req: Request): Buffer {
   return (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.from("");
@@ -124,10 +121,13 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     res.status(500).json({ error: "Inbound events are not configured" });
     return;
   }
-  const expected = createHmac("sha256", secret)
-    .update(`${timestamp}.${source}.${rawBody.toString("utf8")}`)
-    .digest("hex");
-  if (!safeEqual(expected, headers.data["x-operations-signature"])) {
+  const expected = buildInboundSignature({
+    secret,
+    timestamp,
+    source,
+    rawBody: rawBody.toString("utf8"),
+  });
+  if (!signaturesMatch(expected, headers.data["x-operations-signature"])) {
     await refuseInboundEvent(req, res, {
       ...refusalContext,
       status: 401,
@@ -138,10 +138,7 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
 
   const claimedOrganisationId = refusalContext.organisationId;
   const [verifiedOrganisation] =
-    claimedOrganisationId &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      claimedOrganisationId,
-    )
+    isOrganisationId(claimedOrganisationId)
       ? await db
           .select({ id: organisationsTable.id })
           .from(organisationsTable)
@@ -152,7 +149,7 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     ...refusalContext,
     verifiedOrganisationId: verifiedOrganisation?.id,
   };
-  if (Math.abs(Date.now() / 1000 - timestamp) > 300) {
+  if (!isFreshInboundTimestamp(timestamp, Date.now() / 1000)) {
     await refuseInboundEvent(req, res, {
       ...verifiedRefusalContext,
       status: 408,
@@ -180,9 +177,7 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     return;
   }
 
-  const internalDeliveryId = createHash("sha256")
-    .update(`${source}\0${body.data.eventId}`)
-    .digest("hex");
+  const internalDeliveryId = inboundDeliveryKey(source, body.data.eventId);
   const delivery = await db.transaction(async (tx) => {
     const [stored] = await tx.insert(inboundDeliveriesTable).values({
       deliveryId: internalDeliveryId,
@@ -240,7 +235,7 @@ router.post("/jobs/process-imports", async (req, res): Promise<void> => {
     "x-operations-job-token": req.header("x-operations-job-token"),
   });
   const expectedToken = process.env.OPERATIONS_JOB_TOKEN ?? process.env.SESSION_SECRET;
-  if (!header.success || !expectedToken || !safeEqual(header.data["x-operations-job-token"], expectedToken)) {
+  if (!header.success || !expectedToken || !signaturesMatch(header.data["x-operations-job-token"], expectedToken)) {
     res.status(401).json({ error: "Invalid job credentials" });
     return;
   }

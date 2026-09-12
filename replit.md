@@ -1,10 +1,13 @@
-# [Project name]
+# Operations Evidence Console
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Production-shaped evidence intake, validation, summary, approval, and audit workflows for operations teams.
 
 ## Run & Operate
 
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm test` — run the complete automated unit and operations workflow regression suite
+- `pnpm seed` — create the demo users and clean, malformed, and duplicate sample runs
+- `pnpm reset` — delete Operations Evidence Console data and restore the deterministic seeded state
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -20,9 +23,16 @@ _Replace the heading above with the project's name, and this line with one sente
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
 
+The automated suite covers the governed happy path, access isolation, signed inbound events, ingestion and reruns, and model output/failure handling. It uses deterministic production helpers and does not call Clerk, object storage, or the live model.
+
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/operations-evidence-console` — React/Vite console
+- `artifacts/api-server` — Express API and automated tests
+- `lib/db/src/schema/operations.ts` — Operations database schema
+- `lib/api-spec/openapi.yaml` — API contract
+- `scripts/src/seed.ts` — deterministic seed and reset commands
+- `sample-data/fixtures` — clean, malformed, and duplicate sample files
 
 ## Architecture decisions
 

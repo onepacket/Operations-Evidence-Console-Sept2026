@@ -1,0 +1,3 @@
+record_id,email,amount,effective_date
+malformed-001,not-an-email,-25,2025-02-30
+malformed-002,valid@example.com,42.00,2025-01-03
