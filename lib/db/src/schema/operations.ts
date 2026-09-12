@@ -273,6 +273,22 @@ export const auditEventsTable = pgTable("operations_audit_events", {
     .defaultNow(),
 });
 
+export const inboundRefusalAuditTable = pgTable(
+  "operations_inbound_refusal_audit",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organisationId: text("organisation_id"),
+    source: text("source").notNull(),
+    externalId: text("external_id"),
+    deliveryId: text("delivery_id"),
+    reason: text("reason").notNull(),
+    statusCode: integer("status_code").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
+
 export const inboundDeliveriesTable = pgTable(
   "operations_inbound_deliveries",
   {
@@ -371,6 +387,15 @@ export const insertAuditEventSchema = createInsertSchema(auditEventsTable).omit(
 );
 export type InsertAuditEvent = z.infer<typeof insertAuditEventSchema>;
 export type AuditEvent = typeof auditEventsTable.$inferSelect;
+
+export const insertInboundRefusalAuditSchema = createInsertSchema(
+  inboundRefusalAuditTable,
+).omit({ id: true, createdAt: true });
+export type InsertInboundRefusalAudit = z.infer<
+  typeof insertInboundRefusalAuditSchema
+>;
+export type InboundRefusalAudit =
+  typeof inboundRefusalAuditTable.$inferSelect;
 
 export const insertInboundDeliverySchema = createInsertSchema(
   inboundDeliveriesTable,

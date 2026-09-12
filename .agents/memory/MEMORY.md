@@ -1,0 +1,1 @@
+- [Ingestion concurrency](ingestion-concurrency.md) — preserve claim fencing, content-hash serialization, and bounded cancellation when changing import processing.

@@ -453,7 +453,8 @@ export const RequestUploadUrlResponse = zod.object({
 export const ReceiveInboundEventHeader = zod.object({
   "x-operations-signature": zod.string(),
   "x-operations-timestamp": zod.number().int(),
-  "x-operations-delivery": zod.string()
+  "x-operations-delivery": zod.string(),
+  "x-operations-source": zod.string()
 })
 
 

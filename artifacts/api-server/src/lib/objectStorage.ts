@@ -91,12 +91,21 @@ export class ObjectStorageService {
   async downloadObject(
     file: File,
     cacheTtlSec: number = 3600,
+    signal?: AbortSignal,
   ): Promise<Response> {
-    const [metadata] = await file.getMetadata();
-    const aclPolicy = await getObjectAclPolicy(file);
+    signal?.throwIfAborted();
+    const [metadata] = await file.getMetadata({ timeout: 30_000 });
+    const aclPolicy = await getObjectAclPolicy(file, signal);
     const isPublic = aclPolicy?.visibility === 'public';
 
     const nodeStream = file.createReadStream();
+    const abort = () => nodeStream.destroy(
+      signal?.reason instanceof Error
+        ? signal.reason
+        : new Error('Object download aborted'),
+    );
+    signal?.addEventListener('abort', abort, { once: true });
+    nodeStream.once('close', () => signal?.removeEventListener('abort', abort));
     const webStream = Readable.toWeb(nodeStream) as ReadableStream;
 
     const headers: Record<string, string> = {
@@ -133,7 +142,8 @@ export class ObjectStorageService {
     });
   }
 
-  async getObjectEntityFile(objectPath: string): Promise<File> {
+  async getObjectEntityFile(objectPath: string, signal?: AbortSignal): Promise<File> {
+    signal?.throwIfAborted();
     if (!objectPath.startsWith('/objects/')) {
       throw new ObjectNotFoundError();
     }
@@ -152,7 +162,8 @@ export class ObjectStorageService {
     const { bucketName, objectName } = parseObjectPath(objectEntityPath);
     const bucket = objectStorageClient.bucket(bucketName);
     const objectFile = bucket.file(objectName);
-    const [exists] = await objectFile.exists();
+    const [exists] = await objectFile.exists({ timeout: 30_000 });
+    signal?.throwIfAborted();
     if (!exists) {
       throw new ObjectNotFoundError();
     }

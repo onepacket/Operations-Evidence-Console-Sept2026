@@ -255,7 +255,18 @@ function NewRunPage() {
               {
                 onSuccess: (run) => {
                   queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
-                  processRun.mutate({ runId: run.id });
+                  if (run.status === 'queued' || run.status === 'failed') {
+                    processRun.mutate(
+                      { runId: run.id },
+                      {
+                        onSettled: () => {
+                          queryClient.invalidateQueries({ queryKey: getGetRunQueryKey(run.id) });
+                          queryClient.invalidateQueries({ queryKey: getListRunExceptionsQueryKey(run.id) });
+                          queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
+                        },
+                      },
+                    );
+                  }
                   setLocation(`/runs/${run.id}/exceptions`);
                 },
                 onError: () => {

@@ -161,6 +161,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: File or input shape failed permanent validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: Transient processing failure that may be retried.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /runs/{runId}/exceptions:
     get:
       operationId: listRunExceptions
@@ -397,6 +409,11 @@ paths:
           required: true
           schema:
             type: string
+        - name: x-operations-source
+          in: header
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -405,13 +422,25 @@ paths:
               $ref: "#/components/schemas/InboundEventInput"
       responses:
         "202":
-          description: Event accepted or already processed.
+          description: Event accepted.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InboundEventResponse"
         "401":
-          description: Invalid or stale signature.
+          description: Missing or invalid signature.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "408":
+          description: Declared timestamp is outside the five-minute window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: Source and external event id were already received.
           content:
             application/json:
               schema:

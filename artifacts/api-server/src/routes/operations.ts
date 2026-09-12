@@ -8,6 +8,7 @@ import {
   db,
   evidenceSummariesTable,
   importRowsTable,
+  inboundRefusalAuditTable,
   organisationsTable,
   runsTable,
   validationExceptionsTable,
@@ -52,7 +53,10 @@ import {
   requireOperationsAuth,
   requireRole,
 } from "../lib/auth";
-import { processRunForOrganisation } from "../lib/processing";
+import {
+  PipelineValidationError,
+  processRunForOrganisation,
+} from "../lib/processing";
 
 const router: IRouter = Router();
 router.use(requireOperationsAuth);
@@ -228,23 +232,18 @@ router.post(
       return;
     }
     const idempotencyKey = parsed.data.idempotencyKey ?? crypto.randomUUID();
-    const [existing] = await db
-      .select()
-      .from(runsTable)
-      .where(
-        and(
+    const run = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${organisation.id}:${idempotencyKey}`}))`);
+      const [existing] = await tx
+        .select()
+        .from(runsTable)
+        .where(and(
           eq(runsTable.organisationId, organisation.id),
           eq(runsTable.idempotencyKey, idempotencyKey),
-        ),
-      )
-      .limit(1);
-    if (existing) {
-      res.status(201).json(CreateRunResponse.parse(runView(existing)));
-      return;
-    }
-    const [run] = await db
-      .insert(runsTable)
-      .values({
+        ))
+        .limit(1);
+      if (existing) return existing;
+      const [created] = await tx.insert(runsTable).values({
         organisationId: organisation.id,
         createdByMemberId: member.id,
         fileName: parsed.data.fileName,
@@ -252,16 +251,17 @@ router.post(
         fileSize: parsed.data.fileSize,
         objectPath: parsed.data.objectPath,
         idempotencyKey,
-      })
-      .returning();
-    await db.insert(auditEventsTable).values({
-      organisationId: organisation.id,
-      action: "run.created",
-      entityType: "run",
-      entityId: run.id,
-      actor: member.name,
-      role: member.role,
-      metadata: { fileName: run.fileName },
+      }).returning();
+      await tx.insert(auditEventsTable).values({
+        organisationId: organisation.id,
+        action: "run.created",
+        entityType: "run",
+        entityId: created.id,
+        actor: member.name,
+        role: member.role,
+        metadata: { fileName: created.fileName },
+      });
+      return created;
     });
     res.status(201).json(CreateRunResponse.parse(runView(run)));
   },
@@ -292,12 +292,12 @@ router.get("/runs/:runId", async (req, res): Promise<void> => {
     db
       .select()
       .from(importRowsTable)
-      .where(
-        and(
-          eq(importRowsTable.runId, run.id),
-          eq(importRowsTable.organisationId, organisation.id),
-        ),
-      )
+      .where(and(
+        run.importId
+          ? eq(importRowsTable.importId, run.importId)
+          : eq(importRowsTable.runId, run.id),
+        eq(importRowsTable.organisationId, organisation.id),
+      ))
       .orderBy(importRowsTable.rowNumber),
     db
       .select()
@@ -369,12 +369,25 @@ router.post("/runs/:runId/process", async (req, res): Promise<void> => {
     res.status(409).json({ error: "Run cannot be processed in its current state" });
     return;
   }
-  const processed = await processRunForOrganisation(
-    run.id,
-    organisation.id,
-    member,
-  );
-  res.status(202).json(ProcessRunResponse.parse(runView(processed ?? run)));
+  if (run.retryCount >= 3) {
+    res.status(409).json({ error: "Run has reached the maximum attempt count" });
+    return;
+  }
+  try {
+    const processed = await processRunForOrganisation(
+      run.id,
+      organisation.id,
+      member,
+    );
+    res.status(202).json(ProcessRunResponse.parse(runView(processed ?? run)));
+  } catch (error) {
+    if (error instanceof PipelineValidationError) {
+      res.status(422).json({ error: error.message });
+      return;
+    }
+    req.log.error({ err: error, runId: run.id }, "Import processing failed");
+    res.status(503).json({ error: "Import processing failed and may be retried." });
+  }
 });
 
 router.get("/runs/:runId/exceptions", async (req, res): Promise<void> => {
@@ -724,24 +737,53 @@ router.get("/audit", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const events = await db
-    .select()
-    .from(auditEventsTable)
-    .where(eq(auditEventsTable.organisationId, organisation.id))
-    .orderBy(desc(auditEventsTable.createdAt))
-    .limit(parsed.data.limit);
+  const [events, refusals] = await Promise.all([
+    db
+      .select()
+      .from(auditEventsTable)
+      .where(eq(auditEventsTable.organisationId, organisation.id))
+      .orderBy(desc(auditEventsTable.createdAt))
+      .limit(parsed.data.limit),
+    db
+      .select()
+      .from(inboundRefusalAuditTable)
+      .where(eq(inboundRefusalAuditTable.organisationId, organisation.id))
+      .orderBy(desc(inboundRefusalAuditTable.createdAt))
+      .limit(parsed.data.limit),
+  ]);
+  const auditEntries = [
+    ...events.map((event) => ({
+      id: event.id,
+      action: event.action,
+      entityType: event.entityType,
+      entityId: event.entityId,
+      actor: event.actor,
+      role: event.role,
+      createdAt: event.createdAt,
+      metadata: event.metadata ?? {},
+    })),
+    ...refusals.map((refusal) => ({
+      id: refusal.id,
+      action: "inbound.refused",
+      entityType: "inbound_delivery",
+      entityId: refusal.externalId ?? refusal.deliveryId ?? "unknown",
+      actor: "Inbound webhook gateway",
+      role: "administrator" as const,
+      createdAt: refusal.createdAt,
+      metadata: {
+        reason: refusal.reason,
+        source: refusal.source,
+        externalId: refusal.externalId,
+        deliveryId: refusal.deliveryId,
+        status: refusal.statusCode,
+      },
+    })),
+  ]
+    .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+    .slice(0, parsed.data.limit);
   res.json(
     ListAuditEventsResponse.parse(
-      events.map((event) => ({
-        id: event.id,
-        action: event.action,
-        entityType: event.entityType,
-        entityId: event.entityId,
-        actor: event.actor,
-        role: event.role,
-        createdAt: event.createdAt,
-        metadata: event.metadata ?? {},
-      })),
+      auditEntries,
     ),
   );
 });
