@@ -224,7 +224,7 @@ function DashboardPage() {
 }
 
 export function DashboardRoute({ children }: { children?: ReactNode }) {
-  return <ScreenBoundary screen="Dashboard">{children ?? <DashboardPage />}</ScreenBoundary>;
+  return <>{children ?? <DashboardPage />}</>;
 }
 
 function PageFrame({ children }: { children: ReactNode }) { return <>{children}</>; }
