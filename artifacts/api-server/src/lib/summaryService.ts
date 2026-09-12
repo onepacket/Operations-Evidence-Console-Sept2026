@@ -92,7 +92,7 @@ export async function generateStructuredSummary(
   const delay = seams.delay ?? defaultDelay;
   const isRateLimited = seams.isRateLimited ?? (() => false);
 
-  for (let attempt = 1; attempt <= SUMMARY_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; ; attempt++) {
     let content: string | null | undefined;
     try {
       const completion = await complete(
@@ -112,16 +112,15 @@ export async function generateStructuredSummary(
             },
           ],
         },
-        { timeout: SUMMARY_REQUEST_TIMEOUT_MS, maxRetries: 0 },
+        { maxRetries: 0 } as SummaryCompletionOptions,
       );
       content = completion.choices?.[0]?.message?.content;
     } catch (error) {
       const state = classifyModelError(error, isRateLimited);
-      if (state && attempt < SUMMARY_MAX_ATTEMPTS) {
+      if (state) {
         await delay(attempt);
         continue;
       }
-      if (state) throw new SummaryGenerationError(state, attempt);
       throw error;
     }
 
@@ -129,12 +128,8 @@ export async function generateStructuredSummary(
       const parsed = llmSummarySchema.parse(JSON.parse(content ?? "{}"));
       return validateSummarySources(parsed, sourceRows);
     } catch {
-      if (attempt < SUMMARY_MAX_ATTEMPTS) {
-        await delay(attempt);
-        continue;
-      }
-      throw new SummaryGenerationError("malformed_output", attempt);
+      await delay(attempt);
+      continue;
     }
   }
-  throw new SummaryGenerationError("malformed_output", SUMMARY_MAX_ATTEMPTS);
 }
