@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Operations Evidence Console"
+description = "A multi-tenant operations console where analysts upload evidence, review validation exceptions, generate structured summaries, and request administrator-approved follow-up actions while auditors retain read-only visibility."
+version = "1.0.0"
+id = "artifacts/operations-evidence-console"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23368
+
+[services.development]
+run = "pnpm --filter @workspace/operations-evidence-console run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/operations-evidence-console", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/operations-evidence-console/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23368"
+BASE_PATH = "/"

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 32" role="img" aria-label="Proof Ops">
+  <rect width="32" height="32" rx="8" fill="#d9f06c"/>
+  <rect x="9" y="9" width="14" height="14" rx="3" fill="none" stroke="#162338" stroke-width="2.5"/>
+  <circle cx="16" cy="16" r="2.5" fill="#162338"/>
+  <text x="40" y="21" font-family="Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="1.2" fill="#f6f1e5">PROOF</text>
+  <text x="92" y="21" font-family="Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="1.2" fill="#d9f06c">/OPS</text>
+</svg>

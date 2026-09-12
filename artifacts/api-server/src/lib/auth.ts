@@ -1,0 +1,84 @@
+import { getAuth } from "@clerk/express";
+import type { NextFunction, Request, Response } from "express";
+import { and, eq } from "drizzle-orm";
+
+import {
+  db,
+  membersTable,
+  organisationsTable,
+  type Member,
+  type Organisation,
+} from "@workspace/db";
+
+export type OperationsContext = {
+  member: Member;
+  organisation: Organisation;
+};
+
+export type AuthenticatedRequest = Request & {
+  operationsContext?: OperationsContext;
+};
+
+export async function requireOperationsAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const auth = getAuth(req);
+  const userId = auth.userId;
+
+  if (!userId) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  const [context] = await db
+    .select({ member: membersTable, organisation: organisationsTable })
+    .from(membersTable)
+    .innerJoin(
+      organisationsTable,
+      eq(membersTable.organisationId, organisationsTable.id),
+    )
+    .where(eq(membersTable.clerkUserId, userId))
+    .limit(1);
+
+  if (!context) {
+    res
+      .status(403)
+      .json({ error: "Your account is not provisioned for an organisation" });
+    return;
+  }
+
+  (req as AuthenticatedRequest).operationsContext = context;
+  next();
+}
+
+export function requireRole(
+  ...roles: Array<Member["role"]>
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    const context = (req as AuthenticatedRequest).operationsContext;
+    if (!context || !roles.includes(context.member.role)) {
+      res.status(403).json({ error: "This role cannot perform that action" });
+      return;
+    }
+    next();
+  };
+}
+
+export function getOperationsContext(req: Request): OperationsContext {
+  const context = (req as AuthenticatedRequest).operationsContext;
+  if (!context) {
+    throw new Error("Operations context missing");
+  }
+  return context;
+}
+
+export function organisationFilter(req: Request) {
+  return and(
+    eq(
+      membersTable.organisationId,
+      getOperationsContext(req).organisation.id,
+    ),
+  );
+}

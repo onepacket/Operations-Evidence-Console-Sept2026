@@ -1,0 +1,177 @@
+### Prompt 2 — Imports, exceptions, and run history
+
+```
+Build the imports experience.
+
+- Upload CSV or JSON with a size limit and a clear rejection message.
+- Validate before writing anything. Store accepted rows and, for each rejected
+  row, an exception naming the field, the offending value, and the failed rule.
+- Import detail shows accepted rows, rejected rows, and every run attempt with
+  who triggered it, start time, duration, and outcome.
+- Every data view has four distinct states: loading, empty, error, success.
+- Uploads cannot be double-submitted.
+
+Do not change the schema or the access rules from the previous step.
+```
+
+### Prompt 3 — Pipeline: schema, idempotency, retries, scheduled job
+
+```
+Harden the ingestion pipeline.
+
+- Declare the expected input schema explicitly and reject anything that does not
+  match, with a per-field reason.
+- Make imports idempotent: re-uploading or rerunning the same file content must
+  never duplicate accepted rows. Use the content hash.
+- Add bounded retries for transient failures with a maximum attempt count, and
+  record a final failure with a reason instead of retrying forever.
+- Add a scheduled job that picks up stuck runs on a fixed interval and applies
+  the same bounded retry policy.
+
+Do not weaken validation to make a test pass.
+```
+
+### Prompt 4 — Signed inbound events
+
+```
+Add an inbound event endpoint that an external system calls to update a run.
+
+- Verify the request signature using a shared secret from an environment variable.
+- Reject deliveries whose declared timestamp is outside a five-minute window.
+- Deduplicate on (source, external id); the second delivery of the same id is
+  refused, not applied twice.
+- Every refusal is logged with the reason and written to the audit trail.
+- Return the correct status codes: accepted, unauthorised signature, stale, duplicate.
+
+Include a small script that sends a valid, a forged, a stale, and a repeated
+delivery so the behaviour can be demonstrated.
+```
+
+### Prompt 5 — Model summary with safety controls
+
+```
+Add a generated evidence summary for an import.
+
+- Input to the model is the ingested records and exceptions only. Never send
+  free text typed by a user straight into the prompt.
+- Require a structured response and validate it against a declared shape before
+  it is stored or displayed. Invalid output is rejected, recorded, and retryable.
+- Apply a request timeout and a maximum retry count.
+- Every claim in the summary references the source rows it came from, and the
+  interface shows those references.
+- Store the model name and prompt version with each summary.
+- Show timeout, rate limit, and malformed output as distinct retryable states.
+```
+
+### Prompt 6 — Approvals, allowed actions, and audit trail
+
+```
+Add the approval workflow.
+
+- An analyst can request a follow-up action from a fixed, explicit list of
+  allowed action types. Anything outside the list is refused by the server.
+- No consequential action executes without an administrator approval.
+- An analyst cannot approve their own request.
+- Approving and rejecting both require a recorded reason.
+- Build the audit trail screen: append-only entries for sign-in, upload, rerun,
+  summary generation, request, approval, rejection, and inbound event, each with
+  actor, verb, subject, timestamp.
+- The auditor role sees everything and has no mutating controls anywhere.
+```
+
+### Prompt 7 — Frontend resilience
+
+```
+Make the interface fail safely.
+
+- Wrap each top-level screen in its own error boundary so a render failure in one
+  screen does not blank the whole application, and shows a recovery action.
+- Every data view distinguishes loading, empty, error, and success. No silent
+  blank panels and no permanent spinners.
+- Validate every form and upload at runtime before submitting, with field-level
+  messages.
+- Network failures show a retry control and keep the user's input.
+
+Do not remove or loosen any server-side check to simplify the interface.
+```
+
+### Prompt 8 — Tests and seed data
+
+```
+Add automated tests runnable with one documented command.
+
+Cover at minimum:
+- Happy path: sign in, upload, review exceptions, generate summary, request an
+  action, approve it, see the audit entry.
+- Access: unauthenticated request, wrong role, another organisation's record,
+  auditor attempting a mutation.
+- Inbound events: valid, forged signature, stale timestamp, exact replay.
+- Ingestion: clean file, malformed file, duplicate file, rerun after partial failure.
+- Model: valid structured output, malformed output, timeout, disallowed action.
+
+Extend the seed command with three sample files: clean, malformed, duplicate.
+Add a reset command that returns the database to the seeded state.
+```
+
+### Prompt 9 — Documentation and release
+
+```
+Write the repository documentation.
+
+- README: stack, prerequisites, install, seed, run, test, reset, and how to check
+  out each weakness branch.
+- .env.example listing every environment variable name with a comment and no values.
+- A short architecture note or diagram.
+- An entry-point list: routes, API endpoints, upload handlers, scheduled jobs,
+  inbound event endpoints, and model call sites.
+- A known-limitations note.
+
+Then tag a release on main and record the exact commit SHA.
+```
+
+### Weakness branch prompts
+
+Each of these starts from the safe `main`. Change one thing only.
+
+```
+W1 — branch weak/frontend-no-error-containment
+From main, remove the error boundary around exactly one top-level screen so a
+render failure there breaks the application shell. Change nothing else.
+
+W2 — branch weak/api-no-auth
+From main, remove the server-side authentication check from exactly one
+protected API route so it responds to unauthenticated callers. Change nothing else.
+
+W3 — branch weak/api-no-tenant-scope
+From main, remove the organisation filter from exactly one server query so it
+can return another organisation's records. Change nothing else.
+
+W4 — branch weak/webhook-no-verification
+From main, skip signature verification on the inbound event endpoint while
+keeping the timestamp and deduplication checks. Change nothing else.
+
+W5 — branch weak/webhook-no-replay-guard
+From main, remove the deduplication check on inbound events while keeping
+signature verification. Change nothing else.
+
+W6 — branch weak/pipeline-no-schema
+From main, bypass the declared input schema so unvalidated rows are written.
+Change nothing else.
+
+W7 — branch weak/pipeline-non-idempotent
+From main, remove the content-hash idempotency check so a repeated import
+duplicates accepted rows. Change nothing else.
+
+W8 — branch weak/llm-no-output-schema
+From main, accept free-form model output without validating it against the
+declared shape. Change nothing else.
+
+W9 — branch weak/llm-unbounded
+From main, remove the model call timeout and the retry ceiling. Change nothing else.
+
+W10 — branch weak/agent-open-tools
+From main, remove the allowed-action list check or the administrator approval
+requirement, so a consequential action can execute unapproved. Change nothing else.
+```
+
+For every weakness branch, record the branch name, commit SHA, the one file and function changed, and the observable behaviour difference. Do not deploy or merge these branches.
