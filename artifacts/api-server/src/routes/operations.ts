@@ -774,7 +774,6 @@ router.post(
 
 router.post(
   "/actions/:actionId/approve",
-  requireRole("administrator"),
   async (req, res): Promise<void> => {
     const { member, organisation } = getOperationsContext(req);
     const params = ApproveActionParams.safeParse(req.params);
