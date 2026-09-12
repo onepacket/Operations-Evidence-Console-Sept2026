@@ -29,6 +29,9 @@ export const summaryStatusEnum = pgEnum("operations_summary_status", [
   "generating",
   "ready",
   "failed",
+  "timeout",
+  "rate_limited",
+  "malformed_output",
 ]);
 export const exceptionSeverityEnum = pgEnum("operations_exception_severity", [
   "low",
@@ -200,9 +203,25 @@ export const evidenceSummariesTable = pgTable(
     overview: text("overview").notNull(),
     riskLevel: exceptionSeverityEnum("risk_level").notNull(),
     findings: jsonb("findings").$type<
-      Array<{ title: string; detail: string; severity: string }>
+      Array<{
+        title: string;
+        detail: string;
+        severity: string;
+        sourceRowNumbers: number[];
+      }>
     >().notNull(),
+    headlineSourceRows: integer("headline_source_rows")
+      .array()
+      .notNull()
+      .default([]),
+    overviewSourceRows: integer("overview_source_rows")
+      .array()
+      .notNull()
+      .default([]),
     model: text("model").notNull(),
+    promptVersion: text("prompt_version")
+      .notNull()
+      .default("evidence-summary-v1"),
     generatedAt: timestamp("generated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
