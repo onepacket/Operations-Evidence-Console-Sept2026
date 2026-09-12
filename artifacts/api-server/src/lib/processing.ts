@@ -99,7 +99,7 @@ export async function processRunForOrganisation(
     }
     const exceptions = buildExceptions(claimed.id, organisationId, rows);
     const finalStatus = processingStatus(exceptions.length);
-    const contentDigest = contentHash(contentBytes);
+    const contentDigest = contentHash(Buffer.concat([contentBytes, Buffer.from(claimed.id)]));
     const durationMs = Math.max(0, Date.now() - startedAt.getTime());
 
     await db.transaction(async (tx) => {
