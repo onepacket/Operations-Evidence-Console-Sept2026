@@ -198,13 +198,86 @@ function NewRunPage() {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
+  const submitting = useRef(false);
   const uploadUrl = useRequestUploadUrl();
   const createRun = useCreateRun();
   const processRun = useProcessRun();
-  const handleFile = (selected?: File) => { if (!selected) return; if (!['text/csv', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'].includes(selected.type) && !selected.name.match(/\.(csv|xlsx|xls)$/i)) { setError('Choose a CSV or Excel file.'); return; } setError(''); setFile(selected); };
-  const submit = () => { if (!file) { setError('Select a file before continuing.'); return; } uploadUrl.mutate({ data: { name: file.name, size: file.size, contentType: file.type || 'application/octet-stream' } }, { onSuccess: async (upload) => { try { const response = await fetch(upload.uploadURL, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }); if (!response.ok) throw new Error('Upload failed'); createRun.mutate({ data: { fileName: file.name, fileType: file.type || 'application/octet-stream', fileSize: file.size, objectPath: upload.objectPath, idempotencyKey: `${file.name}-${file.size}-${Date.now()}` } }, { onSuccess: (run) => { queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() }); processRun.mutate({ runId: run.id }); setLocation(`/runs/${run.id}/exceptions`); }, onError: () => setError('The run could not be created. Please try again.') }); } catch { setError('The file upload did not complete. Please try again.'); } }, onError: () => setError('We could not prepare the secure upload. Please try again.') }); };
+  const handleFile = (selected?: File) => {
+    if (!selected) return;
+    const validType =
+      ['text/csv', 'application/json', 'application/vnd.api+json'].includes(selected.type) ||
+      /\.(csv|json)$/i.test(selected.name);
+    if (!validType) {
+      setError('Choose a CSV or JSON file.');
+      return;
+    }
+    if (selected.size > 250 * 1024 * 1024) {
+      setError('Files must be 250 MB or smaller.');
+      return;
+    }
+    setError('');
+    setFile(selected);
+  };
+  const submit = () => {
+    if (!file) {
+      setError('Select a file before continuing.');
+      return;
+    }
+    if (submitting.current) return;
+    submitting.current = true;
+    uploadUrl.mutate(
+      {
+        data: {
+          name: file.name,
+          size: file.size,
+          contentType: file.type || 'application/octet-stream',
+        },
+      },
+      {
+        onSuccess: async (upload) => {
+          try {
+            const response = await fetch(upload.uploadURL, {
+              method: 'PUT',
+              headers: { 'Content-Type': file.type || 'application/octet-stream' },
+              body: file,
+            });
+            if (!response.ok) throw new Error('Upload failed');
+            createRun.mutate(
+              {
+                data: {
+                  fileName: file.name,
+                  fileType: file.type || 'application/octet-stream',
+                  fileSize: file.size,
+                  objectPath: upload.objectPath,
+                  idempotencyKey: `${file.name}-${file.size}-${file.lastModified}`,
+                },
+              },
+              {
+                onSuccess: (run) => {
+                  queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
+                  processRun.mutate({ runId: run.id });
+                  setLocation(`/runs/${run.id}/exceptions`);
+                },
+                onError: () => {
+                  submitting.current = false;
+                  setError('The run could not be created. Please try again.');
+                },
+              },
+            );
+          } catch {
+            submitting.current = false;
+            setError('The file upload did not complete. Please try again.');
+          }
+        },
+        onError: () => {
+          submitting.current = false;
+          setError('We could not prepare the secure upload. Please try again.');
+        },
+      },
+    );
+  };
   const pending = uploadUrl.isPending || createRun.isPending;
-  return <PageFrame><PageIntro eyebrow="Evidence intake / new" title="Start an import" detail="Upload one operational file. We will validate it, isolate exceptions, and prepare a defensible summary." action={<Link href="/runs" data-testid="link-new-run-cancel"><Button variant="outline">Cancel</Button></Link>} /><div className="mx-auto max-w-3xl"><div className={`rounded-2xl border-2 border-dashed p-8 text-center transition-colors md:p-16 ${dragging ? 'border-[#718e1f] bg-[#f1f6dc]' : 'border-border bg-card'}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files?.[0]); }} data-testid="dropzone-upload"><input id="file-upload" data-testid="input-file-upload" type="file" className="sr-only" accept=".csv,.xlsx,.xls" onChange={(e) => handleFile(e.target.files?.[0])} /><label htmlFor="file-upload" className="cursor-pointer"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eaf0d0] text-[#627d18]"><UploadCloud className="h-7 w-7" /></span><h2 className="mt-5 text-xl font-semibold">{file ? file.name : 'Drop your file here'}</h2><p className="mt-2 text-sm text-muted-foreground">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ready for secure upload` : 'or click to browse · CSV and Excel up to 250 MB'}</p></label>{file && <button data-testid="button-remove-file" onClick={() => setFile(null)} className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-destructive hover:underline"><X className="h-3.5 w-3.5" />Remove selection</button>}</div>{error && <p data-testid="text-upload-error" className="mt-3 flex items-center gap-2 text-sm text-destructive"><AlertCircle className="h-4 w-4" />{error}</p>}<div className="mt-6 flex items-start gap-3 rounded-xl border border-border bg-card p-4"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[#627d18]" /><div><p className="text-sm font-semibold">Private by default</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Files are sent directly to encrypted object storage. Access is limited to your organisation and every processing step is recorded.</p></div></div><Button data-testid="button-create-run" disabled={!file || pending} onClick={submit} className="mt-6 h-11 w-full bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{pending ? <><Loader2 className="animate-spin" />Preparing secure run…</> : <>Create queued run <ArrowRight /></>}</Button></div></PageFrame>;
+  return <PageFrame><PageIntro eyebrow="Evidence intake / new" title="Start an import" detail="Upload one operational file. We will validate it, isolate exceptions, and prepare a defensible summary." action={<Link href="/runs" data-testid="link-new-run-cancel"><Button variant="outline">Cancel</Button></Link>} /><div className="mx-auto max-w-3xl"><div className={`rounded-2xl border-2 border-dashed p-8 text-center transition-colors md:p-16 ${dragging ? 'border-[#718e1f] bg-[#f1f6dc]' : 'border-border bg-card'}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files?.[0]); }} data-testid="dropzone-upload"><input id="file-upload" data-testid="input-file-upload" type="file" className="sr-only" accept=".csv,.json,application/json,text/csv" onChange={(e) => handleFile(e.target.files?.[0])} /><label htmlFor="file-upload" className="cursor-pointer"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eaf0d0] text-[#627d18]"><UploadCloud className="h-7 w-7" /></span><h2 className="mt-5 text-xl font-semibold">{file ? file.name : 'Drop your file here'}</h2><p className="mt-2 text-sm text-muted-foreground">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ready for secure upload` : 'or click to browse · CSV or JSON up to 250 MB'}</p></label>{file && <button data-testid="button-remove-file" onClick={() => setFile(null)} className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-destructive hover:underline"><X className="h-3.5 w-3.5" />Remove selection</button>}</div>{error && <p data-testid="text-upload-error" className="mt-3 flex items-center gap-2 text-sm text-destructive"><AlertCircle className="h-4 w-4" />{error}</p>}<div className="mt-6 flex items-start gap-3 rounded-xl border border-border bg-card p-4"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[#627d18]" /><div><p className="text-sm font-semibold">Private by default</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Files are sent directly to encrypted object storage. Access is limited to your organisation and every processing step is recorded.</p></div></div><Button data-testid="button-create-run" disabled={!file || pending || submitting.current} onClick={submit} className="mt-6 h-11 w-full bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{pending || submitting.current ? <><Loader2 className="animate-spin" />Preparing secure run…</> : <>Create queued run <ArrowRight /></>}</Button></div></PageFrame>;
 }
 
 function RunHeader({ run, active }: { run?: Run; active: 'exceptions' | 'summary' }) {
@@ -218,10 +291,16 @@ function ExceptionsPage() {
   const exceptions = useListRunExceptions(runId, { query: { queryKey: getListRunExceptionsQueryKey(runId), enabled: !!runId } });
   const [severity, setSeverity] = useState('all');
   const filtered = useMemo(() => (exceptions.data || []).filter((item) => severity === 'all' || item.severity === severity), [exceptions.data, severity]);
-  return <PageFrame><RunHeader run={run.data} active="exceptions" />{exceptions.isLoading ? <LoadingRows /> : exceptions.isError ? <ErrorState retry={() => exceptions.refetch()} /> : <><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Validation exceptions <span className="ml-1 text-muted-foreground">({exceptions.data?.length || 0})</span></h2><p className="mt-1 text-xs text-muted-foreground">Review the rows that need an analyst decision before evidence can be trusted.</p></div><div className="flex gap-1.5">{['all', 'critical', 'high', 'medium', 'low'].map((item) => <button key={item} data-testid={`button-exception-filter-${item}`} onClick={() => setSeverity(item)} className={`rounded-full border px-2.5 py-1 text-[11px] capitalize ${severity === item ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground'}`}>{item}</button>)}</div></div>{!filtered.length ? <EmptyState icon={CheckCircle2} title="No exceptions in this view" detail="This run is clean for the selected severity." /> : <section className="overflow-hidden rounded-xl border border-border bg-card"><div className="hidden grid-cols-[70px_110px_100px_1fr_100px_100px] gap-3 border-b border-border bg-secondary/45 px-4 py-3 text-[10px] font-semibold uppercase tracking-[.14em] text-muted-foreground md:grid"><span>Row</span><span>Field</span><span>Code</span><span>Message</span><span>Severity</span><span>Status</span></div>{filtered.map((item) => <ExceptionRow key={item.id} item={item} />)}</section>}</>}</PageFrame>;
+  return <PageFrame><RunHeader run={run.data} active="exceptions" />{exceptions.isLoading || run.isLoading ? <LoadingRows /> : exceptions.isError || run.isError ? <ErrorState retry={() => { void exceptions.refetch(); void run.refetch(); }} /> : <><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Validation exceptions <span className="ml-1 text-muted-foreground">({exceptions.data?.length || 0})</span></h2><p className="mt-1 text-xs text-muted-foreground">Review the rows that need an analyst decision before evidence can be trusted.</p></div><div className="flex gap-1.5">{['all', 'critical', 'high', 'medium', 'low'].map((item) => <button key={item} data-testid={`button-exception-filter-${item}`} onClick={() => setSeverity(item)} className={`rounded-full border px-2.5 py-1 text-[11px] capitalize ${severity === item ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground'}`}>{item}</button>)}</div></div>{!filtered.length ? <EmptyState icon={CheckCircle2} title="No exceptions in this view" detail="This run is clean for the selected severity." /> : <section className="overflow-hidden rounded-xl border border-border bg-card"><div className="hidden grid-cols-[70px_110px_100px_1fr_100px_100px] gap-3 border-b border-border bg-secondary/45 px-4 py-3 text-[10px] font-semibold uppercase tracking-[.14em] text-muted-foreground md:grid"><span>Row</span><span>Field</span><span>Code</span><span>Message</span><span>Severity</span><span>Status</span></div>{filtered.map((item) => <ExceptionRow key={item.id} item={item} />)}</section>}<div className="mt-7 grid gap-6 xl:grid-cols-2"><RowsPanel title="Accepted rows" rows={run.data?.acceptedRows ?? []} accepted /><RowsPanel title="Rejected rows" rows={run.data?.rejectedRows ?? []} /></div><AttemptsPanel attempts={run.data?.attempts ?? []} /></>}</PageFrame>;
 }
 function ExceptionRow({ item }: { item: ValidationException }) {
   return <div data-testid={`row-exception-${item.id}`} className="grid gap-3 border-b border-border/70 px-4 py-4 last:border-0 md:grid-cols-[70px_110px_100px_1fr_100px_100px] md:items-center"><div className="flex justify-between md:block"><span className="text-xs text-muted-foreground md:hidden">Row</span><span className="mono text-xs font-semibold">#{item.rowNumber}</span></div><div className="flex justify-between md:block"><span className="text-xs text-muted-foreground md:hidden">Field</span><span className="mono text-xs">{item.field}</span></div><div className="flex justify-between md:block"><span className="text-xs text-muted-foreground md:hidden">Code</span><span className="mono text-[11px] text-muted-foreground">{item.code}</span></div><div><p className="text-sm">{item.message}</p>{item.value && <p className="mono mt-1 truncate text-[11px] text-destructive">Received: {item.value}</p>}</div><div><StatusPill value={item.severity} /></div><div><StatusPill value={item.status} /></div></div>;
+}
+function RowsPanel({ title, rows, accepted }: { title: string; rows: Array<{ id: string; rowNumber: number; data: Record<string, unknown> }>; accepted?: boolean }) {
+  return <section className="overflow-hidden rounded-xl border border-border bg-card" data-testid={`panel-${accepted ? 'accepted' : 'rejected'}-rows`}><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h2 className="font-semibold">{title}</h2><p className="mt-1 text-xs text-muted-foreground">{rows.length} row{rows.length === 1 ? '' : 's'} in this run</p></div><StatusPill value={accepted ? 'accepted' : 'rejected'} /></div>{!rows.length ? <div className="p-5"><EmptyState title={`No ${accepted ? 'accepted' : 'rejected'} rows`} detail={accepted ? 'Rows passing validation will appear here.' : 'Rows with validation exceptions will appear here.'} /></div> : <div className="divide-y divide-border/70">{rows.slice(0, 20).map((row) => <div key={row.id} className="flex items-start gap-4 px-5 py-3"><span className="mono text-xs text-muted-foreground">#{row.rowNumber}</span><p className="truncate text-xs text-foreground/75">{Object.entries(row.data).map(([key, value]) => `${key}: ${String(value ?? '')}`).join(' · ')}</p></div>)}</div>}</section>;
+}
+function AttemptsPanel({ attempts }: { attempts: Array<{ id: string; actor: string; startedAt: string; durationMs?: number; outcome: string; reason?: string | null }> }) {
+  return <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card" data-testid="panel-run-attempts"><div className="border-b border-border px-5 py-4"><h2 className="font-semibold">Run attempts</h2><p className="mt-1 text-xs text-muted-foreground">Every validation attempt, actor, duration, and outcome.</p></div>{!attempts.length ? <div className="p-5"><EmptyState icon={History} title="No completed attempts yet" detail="The attempt record will appear after processing starts." /></div> : <div className="divide-y divide-border/70">{attempts.map((attempt) => <div key={attempt.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"><div><p className="text-sm font-semibold">{attempt.actor}</p><p className="mt-1 text-xs text-muted-foreground">{formatDateTime(attempt.startedAt)} · {attempt.durationMs == null ? 'Duration unavailable' : `${attempt.durationMs} ms`}</p>{attempt.reason && <p className="mt-1 text-xs text-destructive">{attempt.reason}</p>}</div><StatusPill value={attempt.outcome} /></div>)}</div>}</section>;
 }
 
 function SummaryPage() {

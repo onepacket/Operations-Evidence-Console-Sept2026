@@ -38,6 +38,7 @@ import type {
   ListRunsParams,
   OrganisationSettings,
   Run,
+  RunDetail,
   RunInput,
   SettingsUpdate,
   SummaryInput,
@@ -488,9 +489,9 @@ export const getGetRunUrl = (runId: string,) => {
 /**
  * @summary Get an import run
  */
-export const getRun = async (runId: string, options?: Parameters<typeof customFetch>[1]): Promise<Run> => {
+export const getRun = async (runId: string, options?: Parameters<typeof customFetch>[1]): Promise<RunDetail> => {
 
-  return customFetch<Run>(getGetRunUrl(runId),
+  return customFetch<RunDetail>(getGetRunUrl(runId),
   {
     ...options,
     method: 'GET'

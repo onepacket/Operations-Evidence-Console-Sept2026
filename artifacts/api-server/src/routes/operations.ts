@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 
@@ -7,6 +7,7 @@ import {
   auditEventsTable,
   db,
   evidenceSummariesTable,
+  importRowsTable,
   organisationsTable,
   runsTable,
   validationExceptionsTable,
@@ -287,7 +288,60 @@ router.get("/runs/:runId", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Run not found" });
     return;
   }
-  res.json(GetRunResponse.parse(runView(run)));
+  const [rows, attempts] = await Promise.all([
+    db
+      .select()
+      .from(importRowsTable)
+      .where(
+        and(
+          eq(importRowsTable.runId, run.id),
+          eq(importRowsTable.organisationId, organisation.id),
+        ),
+      )
+      .orderBy(importRowsTable.rowNumber),
+    db
+      .select()
+      .from(auditEventsTable)
+      .where(
+        and(
+          eq(auditEventsTable.entityId, run.id),
+          eq(auditEventsTable.organisationId, organisation.id),
+          inArray(auditEventsTable.action, ["run.processed", "run.failed"]),
+        ),
+      )
+      .orderBy(desc(auditEventsTable.createdAt)),
+  ]);
+  const runAttempts = attempts.map((attempt) => {
+    const metadata =
+      attempt.metadata && typeof attempt.metadata === "object"
+        ? (attempt.metadata as Record<string, unknown>)
+        : {};
+    return {
+      id: attempt.id,
+      actor: attempt.actor,
+      startedAt:
+        typeof metadata.startedAt === "string"
+          ? metadata.startedAt
+          : attempt.createdAt,
+      durationMs:
+        typeof metadata.durationMs === "number" ? metadata.durationMs : undefined,
+      outcome:
+        typeof metadata.status === "string"
+          ? metadata.status
+          : attempt.action === "run.failed"
+            ? "failed"
+            : "succeeded",
+      reason: typeof metadata.reason === "string" ? metadata.reason : null,
+    };
+  });
+  res.json(
+    GetRunResponse.parse({
+      ...runView(run),
+      acceptedRows: rows.filter((row) => row.accepted),
+      rejectedRows: rows.filter((row) => !row.accepted),
+      attempts: runAttempts,
+    }),
+  );
 });
 
 router.post("/runs/:runId/process", async (req, res): Promise<void> => {

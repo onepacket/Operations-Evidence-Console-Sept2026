@@ -134,7 +134,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Run"
+                $ref: "#/components/schemas/RunDetail"
         "404":
           description: Run not found.
           content:
@@ -527,6 +527,41 @@ components:
         summaryStatus:
           type: string
           enum: [not_started, generating, ready, failed]
+    ImportRow:
+      type: object
+      required: [id, runId, rowNumber, accepted, data, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        runId: { type: string, format: uuid }
+        rowNumber: { type: integer }
+        accepted: { type: boolean }
+        data: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+    RunAttempt:
+      type: object
+      required: [id, actor, startedAt, outcome]
+      properties:
+        id: { type: string }
+        actor: { type: string }
+        startedAt: { type: string, format: date-time }
+        durationMs: { type: integer, minimum: 0 }
+        outcome: { type: string }
+        reason: { type: ["string", "null"] }
+    RunDetail:
+      allOf:
+        - $ref: "#/components/schemas/Run"
+        - type: object
+          required: [acceptedRows, rejectedRows, attempts]
+          properties:
+            acceptedRows:
+              type: array
+              items: { $ref: "#/components/schemas/ImportRow" }
+            rejectedRows:
+              type: array
+              items: { $ref: "#/components/schemas/ImportRow" }
+            attempts:
+              type: array
+              items: { $ref: "#/components/schemas/RunAttempt" }
     RunInput:
       type: object
       required: [fileName, fileType, fileSize, objectPath]
@@ -647,7 +682,7 @@ components:
       required: [name, size, contentType]
       properties:
         name: { type: string, minLength: 1 }
-        size: { type: integer, minimum: 1 }
+        size: { type: integer, minimum: 1, maximum: 262144000 }
         contentType: { type: string, minLength: 1 }
     UploadUrlResponse:
       type: object

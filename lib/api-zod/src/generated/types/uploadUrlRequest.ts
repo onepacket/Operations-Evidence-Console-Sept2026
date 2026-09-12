@@ -9,7 +9,10 @@
 export interface UploadUrlRequest {
   /** @minLength 1 */
   name: string;
-  /** @minimum 1 */
+  /**
+     * @minimum 1
+     * @maximum 262144000
+     */
   size: number;
   /** @minLength 1 */
   contentType: string;

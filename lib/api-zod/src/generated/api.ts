@@ -123,6 +123,10 @@ export const GetRunParams = zod.object({
   "runId": zod.coerce.string().uuid()
 })
 
+export const getRunResponseTwoAttemptsItemDurationMsMin = 0;
+
+
+
 export const GetRunResponse = zod.object({
   "id": zod.string().uuid(),
   "fileName": zod.string(),
@@ -134,7 +138,32 @@ export const GetRunResponse = zod.object({
   "createdAt": zod.coerce.date(),
   "completedAt": zod.coerce.date().nullish(),
   "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed'])
-})
+}).and(zod.object({
+  "acceptedRows": zod.array(zod.object({
+  "id": zod.string().uuid(),
+  "runId": zod.string().uuid(),
+  "rowNumber": zod.number().int(),
+  "accepted": zod.boolean(),
+  "data": zod.record(zod.string(), zod.unknown()),
+  "createdAt": zod.coerce.date()
+})),
+  "rejectedRows": zod.array(zod.object({
+  "id": zod.string().uuid(),
+  "runId": zod.string().uuid(),
+  "rowNumber": zod.number().int(),
+  "accepted": zod.boolean(),
+  "data": zod.record(zod.string(), zod.unknown()),
+  "createdAt": zod.coerce.date()
+})),
+  "attempts": zod.array(zod.object({
+  "id": zod.string(),
+  "actor": zod.string(),
+  "startedAt": zod.coerce.date(),
+  "durationMs": zod.number().int().min(getRunResponseTwoAttemptsItemDurationMsMin).optional(),
+  "outcome": zod.string(),
+  "reason": zod.string().nullish()
+}))
+}))
 
 
 /**
@@ -401,13 +430,14 @@ export const UpdateSettingsResponse = zod.object({
  * @summary Request a presigned URL for a private upload
  */
 
+export const requestUploadUrlBodySizeMax = 262144000;
 
 
 
 
 export const RequestUploadUrlBody = zod.object({
   "name": zod.string().min(1),
-  "size": zod.number().int().min(1),
+  "size": zod.number().int().min(1).max(requestUploadUrlBodySizeMax),
   "contentType": zod.string().min(1)
 })
 

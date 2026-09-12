@@ -79,6 +79,34 @@ export interface Dashboard {
   recentRuns: Run[];
 }
 
+export type ImportRowData = { [key: string]: unknown };
+
+export interface ImportRow {
+  id: string;
+  runId: string;
+  rowNumber: number;
+  accepted: boolean;
+  data: ImportRowData;
+  createdAt: string;
+}
+
+export interface RunAttempt {
+  id: string;
+  actor: string;
+  startedAt: string;
+  /** @minimum 0 */
+  durationMs?: number;
+  outcome: string;
+  /** @nullable */
+  reason?: string | null;
+}
+
+export type RunDetail = Run & {
+  acceptedRows: ImportRow[];
+  rejectedRows: ImportRow[];
+  attempts: RunAttempt[];
+};
+
 export interface RunInput {
   /** @minLength 1 */
   fileName: string;
@@ -261,7 +289,10 @@ export interface SettingsUpdate {
 export interface UploadUrlRequest {
   /** @minLength 1 */
   name: string;
-  /** @minimum 1 */
+  /**
+     * @minimum 1
+     * @maximum 262144000
+     */
   size: number;
   /** @minLength 1 */
   contentType: string;
