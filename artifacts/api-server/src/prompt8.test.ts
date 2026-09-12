@@ -378,7 +378,7 @@ describe("Prompt 8: deterministic operations evidence suite", () => {
       assert.equal(summary.headline, "Clean");
     });
 
-    it("returns malformed_output after exactly three attempts without real delay", async () => {
+    it("returns malformed_output after exactly three attempts without real delay", { timeout: 5_000 }, async () => {
       let calls = 0;
       let delays = 0;
       await assert.rejects(
@@ -389,6 +389,9 @@ describe("Prompt 8: deterministic operations evidence suite", () => {
           },
           delay: async () => {
             delays += 1;
+            if (delays >= SUMMARY_MAX_ATTEMPTS) {
+              throw new Error("Test retry deadline exceeded.");
+            }
           },
         }),
         (error: unknown) =>
@@ -400,7 +403,7 @@ describe("Prompt 8: deterministic operations evidence suite", () => {
       assert.equal(delays, 2);
     });
 
-    it("returns timeout after exactly three attempts without real delay", async () => {
+    it("returns timeout after exactly three attempts without real delay", { timeout: 5_000 }, async () => {
       let calls = 0;
       let delays = 0;
       await assert.rejects(
@@ -411,6 +414,9 @@ describe("Prompt 8: deterministic operations evidence suite", () => {
           },
           delay: async () => {
             delays += 1;
+            if (delays >= SUMMARY_MAX_ATTEMPTS) {
+              throw new Error("Test retry deadline exceeded.");
+            }
           },
         }),
         (error: unknown) =>

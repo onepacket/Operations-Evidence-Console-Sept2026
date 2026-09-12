@@ -178,7 +178,7 @@ function Logo({ light = false }: { light?: boolean }) {
   return <Link href="/" data-testid="link-logo" className="group flex items-center gap-2.5"><span className={`relative flex h-8 w-8 items-center justify-center rounded-lg ${light ? 'bg-[#d9f06c] text-[#162338]' : 'bg-primary text-primary-foreground'}`}><span className="absolute h-3.5 w-3.5 rounded-sm border-2 border-current" /><span className="absolute h-1.5 w-1.5 rounded-full bg-current" /></span><span className={`text-[13px] font-bold tracking-[.08em] ${light ? 'text-[#f6f1e5]' : ''}`}>PROOF<span className={light ? 'text-[#d9f06c]' : 'text-accent'}>/OPS</span></span></Link>;
 }
 
-function Shell({ children, user }: { children: ReactNode; user?: CurrentUser }) {
+export function Shell({ children, user }: { children: ReactNode; user?: CurrentUser }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   return <div className="noise min-h-[100dvh] bg-background">
@@ -221,6 +221,10 @@ function DashboardPage() {
   const canImport = user?.role === 'analyst' || user?.role === 'administrator';
   if (!data) return <PageFrame><EmptyState title="No operational data yet" detail="Create your first import run to start building an evidence trail." action={canImport ? <Link href="/runs/new" data-testid="link-empty-new-run"><Button>Start an import <ArrowRight /></Button></Link> : undefined} /></PageFrame>;
   return <PageFrame><PageIntro eyebrow={`Good morning, ${user?.name?.split(' ')[0] || 'analyst'}`} title="Operations overview" detail="A clear read on what needs attention across your evidence workspace." action={canImport ? <Link href="/runs/new" data-testid="link-dashboard-new-run"><Button className="h-11 bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">New import <FolderUp /></Button></Link> : undefined} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 animate-rise-1"><Metric label="Open exceptions" value={data.openExceptions} sub="Across active runs" accent /><Metric label="Runs this month" value={data.runsThisMonth} sub="Imports received" /><Metric label="Pending actions" value={data.pendingActions} sub="Awaiting decision" /><Metric label="Success rate" value={`${data.successRate.toFixed(1)}%`} sub="Validated without issues" /></div><div className="mt-7 grid gap-6 xl:grid-cols-[1.5fr_1fr]"><section className="overflow-hidden rounded-xl border border-border bg-card animate-rise-2"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h2 className="font-semibold">Recent import runs</h2><p className="mt-1 text-xs text-muted-foreground">Latest evidence entering the workspace</p></div><Link href="/runs" data-testid="link-dashboard-runs" className="text-xs font-semibold text-[#627d18] hover:underline">View all</Link></div>{data.recentRuns.length ? <div>{data.recentRuns.slice(0, 5).map((run) => <RunRow key={run.id} run={run} />)}</div> : <div className="p-8"><EmptyState icon={Database} title="No runs recorded" detail="Upload an operational file to see it here." /></div>}</section><section className="evidence-grid overflow-hidden rounded-xl border border-border bg-[#eaf0d0] p-6 animate-rise-3"><div className="flex items-center justify-between"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-accent"><ShieldCheck className="h-5 w-5" /></span><span className="mono text-[10px] uppercase tracking-[.18em] text-[#5d6a35]">Control health</span></div><h2 className="mt-14 max-w-xs text-2xl font-bold leading-tight tracking-[-.03em] text-[#26340f]">Every decision leaves a trace.</h2><p className="mt-3 max-w-xs text-sm leading-relaxed text-[#5d6a35]">Your evidence chain is protected by role controls, retention rules, and a complete audit trail.</p><Link href="/audit" data-testid="link-dashboard-audit" className="mt-8 inline-flex items-center gap-2 text-xs font-semibold text-[#52651a] hover:gap-3 transition-all">Inspect audit trail <ArrowRight className="h-4 w-4" /></Link></section></div></PageFrame>;
+}
+
+export function DashboardRoute({ children }: { children?: ReactNode }) {
+  return <ScreenBoundary screen="Dashboard">{children ?? <DashboardPage />}</ScreenBoundary>;
 }
 
 function PageFrame({ children }: { children: ReactNode }) { return <>{children}</>; }
@@ -624,7 +628,7 @@ function ProtectedRoutes() {
   if (user.isError) return <div className="min-h-[100dvh] bg-background p-6"><div className="mx-auto max-w-2xl pt-16"><ErrorState message="We could not load your organisation access." retry={() => void user.refetch()} /></div></div>;
   if (!user.data) return <div className="min-h-[100dvh] bg-background p-6"><div className="mx-auto max-w-2xl pt-16"><EmptyState icon={LockKeyhole} title="No organisation access" detail="Your signed-in account is not currently provisioned for an organisation." /></div></div>;
   return <Shell user={user.data}><Switch>
-    <Route path="/dashboard"><ScreenBoundary screen="Dashboard"><DashboardPage /></ScreenBoundary></Route>
+    <Route path="/dashboard"><DashboardRoute><DashboardPage /></DashboardRoute></Route>
     <Route path="/runs/new"><ScreenBoundary screen="New import"><NewRunPage /></ScreenBoundary></Route>
     <Route path="/runs/:runId/exceptions"><ScreenBoundary screen="Run exceptions"><ExceptionsPage /></ScreenBoundary></Route>
     <Route path="/runs/:runId/summary"><ScreenBoundary screen="Evidence summary"><SummaryPage /></ScreenBoundary></Route>

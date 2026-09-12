@@ -61,13 +61,17 @@ The API binds to `PORT`. The frontend uses `BASE_PATH` because Replit serves art
 
 ## Test
 
-Run the complete deterministic regression suite with one command:
+Run the complete regression suite with one command:
 
 ```bash
 pnpm test
 ```
 
-The suite covers the governed happy path, access policies, signed inbound events, ingestion and reruns, and model output/failure handling. It does not call live Clerk, Object Storage, or model services; see [known limitations](docs/known-limitations.md).
+The suite covers the governed happy path, real HTTP route middleware, an isolated
+temporary PostgreSQL schema, signed inbound events, full ingestion and
+deduplication, screen error containment, and model output/failure handling. It
+does not call live Clerk, Object Storage, or model services; those boundaries use
+explicit test-only seams. See [known limitations](docs/known-limitations.md).
 
 Additional release checks:
 

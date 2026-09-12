@@ -30,6 +30,13 @@ export async function requireOperationsAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  if (
+    process.env.NODE_ENV === "test" &&
+    (req as AuthenticatedRequest).operationsContext
+  ) {
+    next();
+    return;
+  }
   const auth = getAuth(req);
   const userId = auth.userId;
 

@@ -24,6 +24,9 @@ const MAX_RETRIES = MAX_PROCESSING_RETRIES;
 const STUCK_RUN_AFTER_MS = 5 * 60 * 1000;
 
 type ProcessingActor = Pick<Member, "id" | "name" | "role">;
+export type ProcessingDependencies = {
+  storage?: Pick<ObjectStorageService, "getObjectEntityFile" | "downloadObject">;
+};
 
 async function claimRun(
   runId: string,
@@ -68,7 +71,9 @@ export async function processRunForOrganisation(
   organisationId: string,
   actor: ProcessingActor,
   signal?: AbortSignal,
+  dependencies: ProcessingDependencies = {},
 ) {
+  const objectStorage = dependencies.storage ?? storage;
   const claimed = await claimRun(runId, organisationId, actor);
   if (!claimed) {
     const [existing] = await db.select().from(runsTable).where(and(eq(runsTable.id, runId), eq(runsTable.organisationId, organisationId))).limit(1);
@@ -77,14 +82,14 @@ export async function processRunForOrganisation(
   const startedAt = claimed.startedAt ?? new Date();
   try {
     signal?.throwIfAborted();
-    const file = await storage.getObjectEntityFile(claimed.objectPath, signal);
+    const file = await objectStorage.getObjectEntityFile(claimed.objectPath, signal);
     const [metadata] = await file.getMetadata({ timeout: 30_000 });
     signal?.throwIfAborted();
     const actualSize = Number(metadata.size ?? claimed.fileSize);
     if (actualSize > MAX_UPLOAD_BYTES) {
       throw new PipelineValidationError("Files must be 250 MB or smaller.");
     }
-    const response = await storage.downloadObject(file, 3600, signal);
+    const response = await objectStorage.downloadObject(file, 3600, signal);
     const contentBytes = Buffer.from(await response.arrayBuffer());
     signal?.throwIfAborted();
     const content = contentBytes.toString("utf8");
