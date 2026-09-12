@@ -706,6 +706,16 @@ importers:
         version: 19.3.0
 
   scripts:
+    dependencies:
+      '@clerk/backend':
+        specifier: ^3.17.2
+        version: 3.17.2
+      '@workspace/db':
+        specifier: workspace:*
+        version: link:../lib/db
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.2(@types/pg@8.23.1)(pg@8.23.0)
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { z } from "zod/v4";
@@ -78,6 +79,33 @@ export const membersTable = pgTable("operations_members", {
     .defaultNow(),
 });
 
+export const importsTable = pgTable(
+  "operations_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organisationId: uuid("organisation_id")
+      .notNull()
+      .references(() => organisationsTable.id, { onDelete: "cascade" }),
+    uploadedByMemberId: uuid("uploaded_by_member_id")
+      .notNull()
+      .references(() => membersTable.id),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull(),
+    fileSize: integer("file_size").notNull(),
+    objectPath: text("object_path").notNull(),
+    contentHash: text("content_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("operations_imports_org_content_hash_unique").on(
+      table.organisationId,
+      table.contentHash,
+    ),
+  ],
+);
+
 export const runsTable = pgTable("operations_runs", {
   id: uuid("id").defaultRandom().primaryKey(),
   organisationId: uuid("organisation_id")
@@ -86,6 +114,9 @@ export const runsTable = pgTable("operations_runs", {
   createdByMemberId: uuid("created_by_member_id")
     .notNull()
     .references(() => membersTable.id),
+  importId: uuid("import_id").references(() => importsTable.id, {
+    onDelete: "cascade",
+  }),
   fileName: text("file_name").notNull(),
   fileType: text("file_type").notNull(),
   fileSize: integer("file_size").notNull(),
@@ -109,6 +140,25 @@ export const runsTable = pgTable("operations_runs", {
     .$onUpdate(() => new Date()),
 });
 
+export const importRowsTable = pgTable("operations_import_rows", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organisationId: uuid("organisation_id")
+    .notNull()
+    .references(() => organisationsTable.id, { onDelete: "cascade" }),
+  importId: uuid("import_id")
+    .notNull()
+    .references(() => importsTable.id, { onDelete: "cascade" }),
+  runId: uuid("run_id")
+    .notNull()
+    .references(() => runsTable.id, { onDelete: "cascade" }),
+  rowNumber: integer("row_number").notNull(),
+  accepted: boolean("accepted").notNull(),
+  data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const validationExceptionsTable = pgTable(
   "operations_validation_exceptions",
   {
@@ -119,6 +169,9 @@ export const validationExceptionsTable = pgTable(
     runId: uuid("run_id")
       .notNull()
       .references(() => runsTable.id, { onDelete: "cascade" }),
+    rowId: uuid("row_id").references(() => importRowsTable.id, {
+      onDelete: "cascade",
+    }),
     rowNumber: integer("row_number").notNull(),
     field: text("field").notNull(),
     code: text("code").notNull(),
@@ -185,6 +238,25 @@ export const actionRequestsTable = pgTable(
   },
 );
 
+export const approvalsTable = pgTable("operations_approvals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organisationId: uuid("organisation_id")
+    .notNull()
+    .references(() => organisationsTable.id, { onDelete: "cascade" }),
+  actionRequestId: uuid("action_request_id")
+    .notNull()
+    .references(() => actionRequestsTable.id, { onDelete: "cascade" })
+    .unique(),
+  decidedByMemberId: uuid("decided_by_member_id")
+    .notNull()
+    .references(() => membersTable.id),
+  decision: text("decision", { enum: ["approved", "rejected"] }).notNull(),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const auditEventsTable = pgTable("operations_audit_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   organisationId: uuid("organisation_id")
@@ -206,6 +278,8 @@ export const inboundDeliveriesTable = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     deliveryId: text("delivery_id").notNull().unique(),
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
     eventId: text("event_id").notNull(),
     organisationId: uuid("organisation_id")
       .notNull()
@@ -217,6 +291,12 @@ export const inboundDeliveriesTable = pgTable(
       .defaultNow(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
   },
+  (table) => [
+    uniqueIndex("operations_inbound_source_external_unique").on(
+      table.source,
+      table.externalId,
+    ),
+  ],
 );
 
 export const insertOrganisationSchema = createInsertSchema(
@@ -232,6 +312,13 @@ export const insertMemberSchema = createInsertSchema(membersTable).omit({
 export type InsertMember = z.infer<typeof insertMemberSchema>;
 export type Member = typeof membersTable.$inferSelect;
 
+export const insertImportSchema = createInsertSchema(importsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertImport = z.infer<typeof insertImportSchema>;
+export type Import = typeof importsTable.$inferSelect;
+
 export const insertRunSchema = createInsertSchema(runsTable).omit({
   id: true,
   createdAt: true,
@@ -241,6 +328,13 @@ export const insertRunSchema = createInsertSchema(runsTable).omit({
 });
 export type InsertRun = z.infer<typeof insertRunSchema>;
 export type Run = typeof runsTable.$inferSelect;
+
+export const insertImportRowSchema = createInsertSchema(importRowsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertImportRow = z.infer<typeof insertImportRowSchema>;
+export type ImportRow = typeof importRowsTable.$inferSelect;
 
 export const insertValidationExceptionSchema = createInsertSchema(
   validationExceptionsTable,
@@ -264,6 +358,13 @@ export const insertActionRequestSchema = createInsertSchema(
 ).omit({ id: true, requestedAt: true, decidedAt: true });
 export type InsertActionRequest = z.infer<typeof insertActionRequestSchema>;
 export type ActionRequest = typeof actionRequestsTable.$inferSelect;
+
+export const insertApprovalSchema = createInsertSchema(approvalsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertApproval = z.infer<typeof insertApprovalSchema>;
+export type Approval = typeof approvalsTable.$inferSelect;
 
 export const insertAuditEventSchema = createInsertSchema(auditEventsTable).omit(
   { id: true, createdAt: true },

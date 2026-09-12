@@ -1,15 +1,20 @@
 import { Readable } from 'stream';
+import { and, eq } from "drizzle-orm";
 import {
   RequestUploadUrlBody,
   RequestUploadUrlResponse,
 } from '@workspace/api-zod';
+import { db, importsTable, runsTable } from "@workspace/db";
 import { Router, type IRouter, type Request, type Response } from 'express';
 
 import {
   ObjectNotFoundError,
   ObjectStorageService,
 } from '../lib/objectStorage';
-import { requireOperationsAuth } from "../lib/auth";
+import {
+  getOperationsContext,
+  requireOperationsAuth,
+} from "../lib/auth";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -105,6 +110,33 @@ router.get('/storage/objects/*path', async (req: Request, res: Response) => {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join('/') : raw;
     const objectPath = `/objects/${wildcardPath}`;
+    const { organisation } = getOperationsContext(req);
+    const [[run], [storedImport]] = await Promise.all([
+      db
+        .select({ id: runsTable.id })
+        .from(runsTable)
+        .where(
+          and(
+            eq(runsTable.organisationId, organisation.id),
+            eq(runsTable.objectPath, objectPath),
+          ),
+        )
+        .limit(1),
+      db
+        .select({ id: importsTable.id })
+        .from(importsTable)
+        .where(
+          and(
+            eq(importsTable.organisationId, organisation.id),
+            eq(importsTable.objectPath, objectPath),
+          ),
+        )
+        .limit(1),
+    ]);
+    if (!run && !storedImport) {
+      res.status(404).json({ error: 'Object not found' });
+      return;
+    }
     const objectFile =
       await objectStorageService.getObjectEntityFile(objectPath);
 

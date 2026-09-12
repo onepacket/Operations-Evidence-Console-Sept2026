@@ -72,6 +72,7 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     res.status(400).json({ error: body.error.message });
     return;
   }
+  const source = req.header("x-operations-source") ?? "external";
 
   const [organisation] = await db
     .select({ id: organisationsTable.id })
@@ -86,7 +87,12 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
   const [existing] = await db
     .select({ id: inboundDeliveriesTable.id })
     .from(inboundDeliveriesTable)
-    .where(eq(inboundDeliveriesTable.deliveryId, headers.data["x-operations-delivery"]))
+    .where(
+      and(
+        eq(inboundDeliveriesTable.source, source),
+        eq(inboundDeliveriesTable.externalId, body.data.eventId),
+      ),
+    )
     .limit(1);
   if (existing) {
     res.status(202).json(
@@ -97,6 +103,8 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
 
   await db.insert(inboundDeliveriesTable).values({
     deliveryId: headers.data["x-operations-delivery"],
+    source,
+    externalId: body.data.eventId,
     eventId: body.data.eventId,
     organisationId: body.data.organisationId,
     eventType: body.data.eventType,

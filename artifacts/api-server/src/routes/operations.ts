@@ -524,6 +524,20 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    const [ownedRun] = await db
+      .select({ id: runsTable.id })
+      .from(runsTable)
+      .where(
+        and(
+          eq(runsTable.id, parsed.data.runId),
+          eq(runsTable.organisationId, organisation.id),
+        ),
+      )
+      .limit(1);
+    if (!ownedRun) {
+      res.status(404).json({ error: "Run not found" });
+      return;
+    }
     const [action] = await db
       .insert(actionRequestsTable)
       .values({
