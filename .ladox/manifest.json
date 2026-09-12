@@ -25,7 +25,6 @@
         "path_prefix": "artifacts/api-server/src/routes",
         "entities": ["organisation", "inbound_event", "audit_entry"],
         "guards": [
-          "auth-session",
           "idempotency-key",
           "webhook-replay-protection",
           "service-role-isolation"
@@ -318,7 +317,7 @@
       "path": "/api/webhooks/inbound",
       "method": "POST",
       "validator": "inbound_event",
-      "guards": ["auth-session", "webhook-replay-protection"]
+      "guards": ["webhook-replay-protection", "idempotency-key"]
     }
   ]
 }
