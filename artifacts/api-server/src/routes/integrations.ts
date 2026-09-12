@@ -121,21 +121,6 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     res.status(500).json({ error: "Inbound events are not configured" });
     return;
   }
-  const expected = buildInboundSignature({
-    secret,
-    timestamp,
-    source,
-    rawBody: rawBody.toString("utf8"),
-  });
-  if (!signaturesMatch(expected, headers.data["x-operations-signature"])) {
-    await refuseInboundEvent(req, res, {
-      ...refusalContext,
-      status: 401,
-      reason: "Invalid event signature",
-    });
-    return;
-  }
-
   const claimedOrganisationId = refusalContext.organisationId;
   const [verifiedOrganisation] =
     isOrganisationId(claimedOrganisationId)
