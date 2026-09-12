@@ -7,5 +7,9 @@
  */
 
 export interface ActionDecisionInput {
-  note?: string;
+  /**
+     * @minLength 1
+     * @maxLength 1000
+     */
+  reason: string;
 }

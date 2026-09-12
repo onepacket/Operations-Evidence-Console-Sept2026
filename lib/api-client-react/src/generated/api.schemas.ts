@@ -243,6 +243,7 @@ export interface ActionRequest {
   rationale: string;
   status: ActionRequestStatus;
   requestedBy: string;
+  canDecide: boolean;
   requestedAt: string;
   /** @nullable */
   decidedAt?: string | null;
@@ -271,7 +272,11 @@ export interface ActionRequestInput {
 }
 
 export interface ActionDecisionInput {
-  note?: string;
+  /**
+     * @minLength 1
+     * @maxLength 1000
+     */
+  reason: string;
 }
 
 export type AuditEventMetadata = { [key: string]: unknown };

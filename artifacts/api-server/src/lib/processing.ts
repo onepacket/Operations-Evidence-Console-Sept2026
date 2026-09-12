@@ -24,22 +24,42 @@ const STUCK_RUN_AFTER_MS = 5 * 60 * 1000;
 
 type ProcessingActor = Pick<Member, "id" | "name" | "role">;
 
-async function claimRun(runId: string, organisationId: string) {
+async function claimRun(
+  runId: string,
+  organisationId: string,
+  actor: ProcessingActor,
+) {
   const stuckBefore = new Date(Date.now() - STUCK_RUN_AFTER_MS);
-  const [claimed] = await db
-    .update(runsTable)
-    .set({ status: "running", startedAt: new Date(), retryCount: sql`${runsTable.retryCount} + 1`, updatedAt: new Date() })
-    .where(and(
-      eq(runsTable.id, runId),
-      eq(runsTable.organisationId, organisationId),
-      or(
-        inArray(runsTable.status, ["queued", "failed"]),
-        and(eq(runsTable.status, "running"), lte(runsTable.startedAt, stuckBefore)),
-      ),
-      lt(runsTable.retryCount, MAX_RETRIES),
-    ))
-    .returning();
-  return claimed;
+  return db.transaction(async (tx) => {
+    const [claimed] = await tx
+      .update(runsTable)
+      .set({ status: "running", startedAt: new Date(), retryCount: sql`${runsTable.retryCount} + 1`, updatedAt: new Date() })
+      .where(and(
+        eq(runsTable.id, runId),
+        eq(runsTable.organisationId, organisationId),
+        or(
+          inArray(runsTable.status, ["queued", "failed"]),
+          and(eq(runsTable.status, "running"), lte(runsTable.startedAt, stuckBefore)),
+        ),
+        lt(runsTable.retryCount, MAX_RETRIES),
+      ))
+      .returning();
+    if (claimed && claimed.retryCount > 1) {
+      await tx.insert(auditEventsTable).values({
+        organisationId,
+        action: "run.rerun_started",
+        entityType: "run",
+        entityId: claimed.id,
+        actor: actor.name,
+        role: actor.role,
+        metadata: {
+          attempt: claimed.retryCount,
+          source: "shared_processing_claim",
+        },
+      });
+    }
+    return claimed;
+  });
 }
 
 export async function processRunForOrganisation(
@@ -48,7 +68,7 @@ export async function processRunForOrganisation(
   actor: ProcessingActor,
   signal?: AbortSignal,
 ) {
-  const claimed = await claimRun(runId, organisationId);
+  const claimed = await claimRun(runId, organisationId, actor);
   if (!claimed) {
     const [existing] = await db.select().from(runsTable).where(and(eq(runsTable.id, runId), eq(runsTable.organisationId, organisationId))).limit(1);
     return existing;

@@ -276,21 +276,48 @@ export const approvalsTable = pgTable("operations_approvals", {
     .defaultNow(),
 });
 
-export const auditEventsTable = pgTable("operations_audit_events", {
+export const actionExecutionsTable = pgTable("operations_action_executions", {
   id: uuid("id").defaultRandom().primaryKey(),
   organisationId: uuid("organisation_id")
     .notNull()
     .references(() => organisationsTable.id, { onDelete: "cascade" }),
-  action: text("action").notNull(),
-  entityType: text("entity_type").notNull(),
-  entityId: text("entity_id").notNull(),
-  actor: text("actor").notNull(),
-  role: roleEnum("role").notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
-  createdAt: timestamp("created_at", { withTimezone: true })
+  actionRequestId: uuid("action_request_id")
+    .notNull()
+    .references(() => actionRequestsTable.id, { onDelete: "cascade" })
+    .unique(),
+  actionType: text("action_type").notNull(),
+  effect: jsonb("effect").$type<Record<string, unknown>>().notNull(),
+  executedAt: timestamp("executed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
 });
+
+export const auditEventsTable = pgTable(
+  "operations_audit_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organisationId: uuid("organisation_id")
+      .notNull()
+      .references(() => organisationsTable.id, { onDelete: "cascade" }),
+    action: text("action").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    actor: text("actor").notNull(),
+    role: roleEnum("role").notNull(),
+    authSessionKey: text("auth_session_key"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("operations_audit_auth_session_unique").on(
+      table.organisationId,
+      table.action,
+      table.authSessionKey,
+    ),
+  ],
+);
 
 export const inboundRefusalAuditTable = pgTable(
   "operations_inbound_refusal_audit",

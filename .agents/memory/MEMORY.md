@@ -1,3 +1,4 @@
 - [Ingestion concurrency](ingestion-concurrency.md) — preserve claim fencing, content-hash serialization, and bounded cancellation when changing import processing.
 - [Webhook audit trust](webhook-audit-trust.md) — keep claimed and verified tenant identity separate when recording unauthenticated webhook refusals.
 - [Evidence summary trust](evidence-summary-trust.md) — model summaries must be row-cited, schema-validated, versioned, and isolated from user-entered free text.
+- [Approval integrity](approval-integrity.md) — keep approval, typed action effects, and audit evidence atomic; protect every audit ledger from all destructive mutation paths.

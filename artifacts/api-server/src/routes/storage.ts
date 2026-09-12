@@ -14,6 +14,7 @@ import {
 import {
   getOperationsContext,
   requireOperationsAuth,
+  requireRole,
 } from "../lib/auth";
 import { validateUploadMetadata } from "../lib/importValidation";
 
@@ -32,6 +33,7 @@ router.use(requireOperationsAuth);
  */
 router.post(
   '/storage/uploads/request-url',
+  requireRole("analyst", "administrator"),
   async (req: Request, res: Response) => {
     const parsed = RequestUploadUrlBody.safeParse(req.body);
     if (!parsed.success) {

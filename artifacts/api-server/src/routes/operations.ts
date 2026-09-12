@@ -3,7 +3,9 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 
 import {
+  actionExecutionsTable,
   actionRequestsTable,
+  approvalsTable,
   auditEventsTable,
   db,
   evidenceSummariesTable,
@@ -12,8 +14,10 @@ import {
   organisationsTable,
   runsTable,
   validationExceptionsTable,
+  type Member,
 } from "@workspace/db";
 import {
+  ApproveActionBody,
   ApproveActionParams,
   ApproveActionResponse,
   CreateRunBody,
@@ -76,7 +80,41 @@ function runView(run: typeof runsTable.$inferSelect) {
   };
 }
 
-function actionView(action: typeof actionRequestsTable.$inferSelect) {
+const allowedActionTypes = [
+  "request_correction",
+  "notify_owner",
+  "create_review_task",
+] as const;
+const allowedActionTypeSet = new Set<string>(allowedActionTypes);
+const actionResults: Record<(typeof allowedActionTypes)[number], string> = {
+  request_correction: "A source correction work item was created.",
+  notify_owner: "A data owner notification was queued for delivery.",
+  create_review_task: "A review task was created.",
+};
+
+function isAllowedActionType(
+  value: string,
+): value is (typeof allowedActionTypes)[number] {
+  return allowedActionTypeSet.has(value);
+}
+
+function actionEffect(
+  actionType: (typeof allowedActionTypes)[number],
+  runId: string,
+) {
+  if (actionType === "request_correction") {
+    return { kind: "correction_work_item", runId, status: "open" };
+  }
+  if (actionType === "notify_owner") {
+    return { kind: "owner_notification", runId, status: "queued" };
+  }
+  return { kind: "review_task", runId, status: "open" };
+}
+
+function actionView(
+  action: typeof actionRequestsTable.$inferSelect,
+  viewer?: Member,
+) {
   return {
     id: action.id,
     runId: action.runId,
@@ -89,6 +127,10 @@ function actionView(action: typeof actionRequestsTable.$inferSelect) {
     decidedAt: action.decidedAt,
     decisionNote: action.decisionNote,
     result: action.result,
+    canDecide:
+      viewer?.role === "administrator" &&
+      action.status === "requested" &&
+      action.requestedByMemberId !== viewer.id,
   };
 }
 
@@ -254,7 +296,7 @@ router.post(
       }).returning();
       await tx.insert(auditEventsTable).values({
         organisationId: organisation.id,
-        action: "run.created",
+        action: "upload.received",
         entityType: "run",
         entityId: created.id,
         actor: member.name,
@@ -316,7 +358,10 @@ router.get("/runs/:runId", async (req, res): Promise<void> => {
   );
 });
 
-router.post("/runs/:runId/process", async (req, res): Promise<void> => {
+router.post(
+  "/runs/:runId/process",
+  requireRole("analyst", "administrator"),
+  async (req, res): Promise<void> => {
   const { member, organisation } = getOperationsContext(req);
   const parsed = ProcessRunParams.safeParse(req.params);
   if (!parsed.success) {
@@ -360,7 +405,8 @@ router.post("/runs/:runId/process", async (req, res): Promise<void> => {
     req.log.error({ err: error, runId: run.id }, "Import processing failed");
     res.status(503).json({ error: "Import processing failed and may be retried." });
   }
-});
+  },
+);
 
 router.get("/runs/:runId/exceptions", async (req, res): Promise<void> => {
   const { organisation } = getOperationsContext(req);
@@ -681,41 +727,44 @@ router.post(
       },
       sourceRowNumbers,
     );
-    const [summary] = await db
-      .insert(evidenceSummariesTable)
-      .values({
-        organisationId: organisation.id,
-        runId: run.id,
-        ...parsedSummary,
-        model: SUMMARY_MODEL,
-        promptVersion: SUMMARY_PROMPT_VERSION,
-      })
-      .onConflictDoUpdate({
-        target: evidenceSummariesTable.runId,
-        set: {
+    const summary = await db.transaction(async (tx) => {
+      const [stored] = await tx
+        .insert(evidenceSummariesTable)
+        .values({
+          organisationId: organisation.id,
+          runId: run.id,
           ...parsedSummary,
           model: SUMMARY_MODEL,
           promptVersion: SUMMARY_PROMPT_VERSION,
-          generatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: evidenceSummariesTable.runId,
+          set: {
+            ...parsedSummary,
+            model: SUMMARY_MODEL,
+            promptVersion: SUMMARY_PROMPT_VERSION,
+            generatedAt: new Date(),
+          },
+        })
+        .returning();
+      await tx
+        .update(runsTable)
+        .set({ summaryStatus: "ready", updatedAt: new Date() })
+        .where(eq(runsTable.id, run.id));
+      await tx.insert(auditEventsTable).values({
+        organisationId: organisation.id,
+        action: "summary.generated",
+        entityType: "summary",
+        entityId: stored.id,
+        actor: member.name,
+        role: member.role,
+        metadata: {
+          runId: run.id,
+          model: SUMMARY_MODEL,
+          promptVersion: SUMMARY_PROMPT_VERSION,
         },
-      })
-      .returning();
-    await db
-      .update(runsTable)
-      .set({ summaryStatus: "ready", updatedAt: new Date() })
-      .where(eq(runsTable.id, run.id));
-    await db.insert(auditEventsTable).values({
-      organisationId: organisation.id,
-      action: "summary.generated",
-      entityType: "summary",
-      entityId: summary.id,
-      actor: member.name,
-      role: member.role,
-      metadata: {
-        runId: run.id,
-        model: SUMMARY_MODEL,
-        promptVersion: SUMMARY_PROMPT_VERSION,
-      },
+      });
+      return stored;
     });
     res.status(201).json(
       GenerateRunSummaryResponse.parse(
@@ -727,29 +776,31 @@ router.post(
       error instanceof SummaryGenerationError ? error.state : "failed";
     const attempts =
       error instanceof SummaryGenerationError ? error.attempts : 1;
-    await db
-      .update(runsTable)
-      .set({
-        summaryStatus: state,
-        updatedAt: new Date(),
-      })
-      .where(eq(runsTable.id, run.id));
     try {
-      await db.insert(auditEventsTable).values({
-        organisationId: organisation.id,
-        action: "summary.generation_failed",
-        entityType: "run",
-        entityId: run.id,
-        actor: member.name,
-        role: member.role,
-        metadata: {
-          runId: run.id,
-          model: SUMMARY_MODEL,
-          promptVersion: SUMMARY_PROMPT_VERSION,
-          failureState: state,
-          attempts,
-          retryable: state !== "failed",
-        },
+      await db.transaction(async (tx) => {
+        await tx
+          .update(runsTable)
+          .set({
+            summaryStatus: state,
+            updatedAt: new Date(),
+          })
+          .where(eq(runsTable.id, run.id));
+        await tx.insert(auditEventsTable).values({
+          organisationId: organisation.id,
+          action: "summary.generation_failed",
+          entityType: "run",
+          entityId: run.id,
+          actor: member.name,
+          role: member.role,
+          metadata: {
+            runId: run.id,
+            model: SUMMARY_MODEL,
+            promptVersion: SUMMARY_PROMPT_VERSION,
+            failureState: state,
+            attempts,
+            retryable: state !== "failed",
+          },
+        });
       });
     } catch (auditError) {
       req.log.error(
@@ -786,7 +837,7 @@ router.post(
 );
 
 router.get("/actions", async (req, res): Promise<void> => {
-  const { organisation } = getOperationsContext(req);
+  const { member, organisation } = getOperationsContext(req);
   const parsed = ListActionsQueryParams.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -801,7 +852,7 @@ router.get("/actions", async (req, res): Promise<void> => {
     .from(actionRequestsTable)
     .where(and(...conditions))
     .orderBy(desc(actionRequestsTable.requestedAt));
-  res.json(ListActionsResponse.parse(actions.map(actionView)));
+  res.json(ListActionsResponse.parse(actions.map((action) => actionView(action, member))));
 });
 
 router.post(
@@ -809,6 +860,17 @@ router.post(
   requireRole("analyst", "administrator"),
   async (req, res): Promise<void> => {
     const { member, organisation } = getOperationsContext(req);
+    const requestedActionType =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>).actionType
+        : undefined;
+    if (
+      typeof requestedActionType === "string" &&
+      !isAllowedActionType(requestedActionType)
+    ) {
+      res.status(400).json({ error: "Unsupported action type" });
+      return;
+    }
     const parsed = RequestActionBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
@@ -828,27 +890,30 @@ router.post(
       res.status(404).json({ error: "Run not found" });
       return;
     }
-    const [action] = await db
-      .insert(actionRequestsTable)
-      .values({
+    const action = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(actionRequestsTable)
+        .values({
+          organisationId: organisation.id,
+          runId: parsed.data.runId,
+          actionType: parsed.data.actionType,
+          title: parsed.data.title,
+          rationale: parsed.data.rationale,
+          requestedByMemberId: member.id,
+        })
+        .returning();
+      await tx.insert(auditEventsTable).values({
         organisationId: organisation.id,
-        runId: parsed.data.runId,
-        actionType: parsed.data.actionType,
-        title: parsed.data.title,
-        rationale: parsed.data.rationale,
-        requestedByMemberId: member.id,
-      })
-      .returning();
-    await db.insert(auditEventsTable).values({
-      organisationId: organisation.id,
-      action: "action.requested",
-      entityType: "action",
-      entityId: action.id,
-      actor: member.name,
-      role: member.role,
-      metadata: { actionType: action.actionType, runId: action.runId },
+        action: "action.requested",
+        entityType: "action",
+        entityId: created.id,
+        actor: member.name,
+        role: member.role,
+        metadata: { actionType: created.actionType, runId: created.runId },
+      });
+      return created;
     });
-    res.status(201).json(RequestActionResponse.parse(actionView(action)));
+    res.status(201).json(RequestActionResponse.parse(actionView(action, member)));
   },
 );
 
@@ -858,54 +923,119 @@ router.post(
   async (req, res): Promise<void> => {
     const { member, organisation } = getOperationsContext(req);
     const params = ApproveActionParams.safeParse(req.params);
-    if (!params.success) {
-      res.status(400).json({ error: params.error.message });
+    const body = ApproveActionBody.safeParse(req.body);
+    if (!params.success || !body.success || !body.data.reason.trim()) {
+      res.status(400).json({ error: "A recorded approval reason is required" });
       return;
     }
-    const [action] = await db
-      .select()
-      .from(actionRequestsTable)
-      .where(
-        and(
-          eq(actionRequestsTable.id, params.data.actionId),
-          eq(actionRequestsTable.organisationId, organisation.id),
-        ),
-      )
-      .limit(1);
-    if (!action) {
-      res.status(404).json({ error: "Action not found" });
-      return;
-    }
-    if (action.status !== "requested") {
-      res.status(409).json({ error: "Action is no longer awaiting approval" });
-      return;
-    }
-    await db
-      .update(actionRequestsTable)
-      .set({
-        status: "running",
+    const reason = body.data.reason.trim();
+    const outcome = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${params.data.actionId}))`,
+      );
+      const [action] = await tx
+        .select()
+        .from(actionRequestsTable)
+        .where(
+          and(
+            eq(actionRequestsTable.id, params.data.actionId),
+            eq(actionRequestsTable.organisationId, organisation.id),
+          ),
+        )
+        .limit(1);
+      if (!action) return { error: "not_found" as const };
+      if (action.requestedByMemberId === member.id) {
+        return { error: "self_approval" as const };
+      }
+      if (action.status !== "requested") {
+        return { error: "already_decided" as const };
+      }
+      if (!isAllowedActionType(action.actionType)) {
+        return { error: "unsupported_action" as const };
+      }
+      const decidedAt = new Date();
+      const [approved] = await tx
+        .update(actionRequestsTable)
+        .set({
+          status: "approved",
+          decidedByMemberId: member.id,
+          decidedAt,
+          decisionNote: reason,
+        })
+        .where(
+          and(
+            eq(actionRequestsTable.id, action.id),
+            eq(actionRequestsTable.status, "requested"),
+          ),
+        )
+        .returning();
+      if (!approved) return { error: "already_decided" as const };
+      await tx.insert(approvalsTable).values({
+        organisationId: organisation.id,
+        actionRequestId: action.id,
         decidedByMemberId: member.id,
-        decidedAt: new Date(),
-      })
-      .where(eq(actionRequestsTable.id, action.id));
-    const [completed] = await db
-      .update(actionRequestsTable)
-      .set({
-        status: "completed",
-        result: "Follow-up action executed and recorded for review.",
-      })
-      .where(eq(actionRequestsTable.id, action.id))
-      .returning();
-    await db.insert(auditEventsTable).values({
-      organisationId: organisation.id,
-      action: "action.approved_and_executed",
-      entityType: "action",
-      entityId: action.id,
-      actor: member.name,
-      role: member.role,
-      metadata: { runId: action.runId },
+        decision: "approved",
+        reason,
+      });
+      const [execution] = await tx
+        .insert(actionExecutionsTable)
+        .values({
+          organisationId: organisation.id,
+          actionRequestId: action.id,
+          actionType: action.actionType,
+          effect: actionEffect(action.actionType, action.runId),
+        })
+        .returning();
+      const [completed] = await tx
+        .update(actionRequestsTable)
+        .set({
+          status: "completed",
+          decidedByMemberId: member.id,
+          decidedAt,
+          decisionNote: reason,
+          result: actionResults[action.actionType],
+        })
+        .where(
+          and(
+            eq(actionRequestsTable.id, action.id),
+            eq(actionRequestsTable.status, "approved"),
+          ),
+        )
+        .returning();
+      if (!completed) {
+        throw new Error("Approved action could not be marked completed");
+      }
+      await tx.insert(auditEventsTable).values({
+        organisationId: organisation.id,
+        action: "action.approved",
+        entityType: "action",
+        entityId: action.id,
+        actor: member.name,
+        role: member.role,
+        metadata: {
+          runId: action.runId,
+          actionType: action.actionType,
+          reason,
+          executed: true,
+          executionId: execution.id,
+          effect: execution.effect,
+        },
+      });
+      return { completed };
     });
-    res.json(ApproveActionResponse.parse(actionView(completed)));
+    if ("error" in outcome) {
+      if (outcome.error === "not_found") {
+        res.status(404).json({ error: "Action not found" });
+      } else if (outcome.error === "self_approval") {
+        res.status(403).json({ error: "You cannot approve your own action request" });
+      } else if (outcome.error === "unsupported_action") {
+        res.status(409).json({ error: "The requested action type is not supported" });
+      } else {
+        res.status(409).json({ error: "Action is no longer awaiting approval" });
+      }
+      return;
+    }
+    res.json(ApproveActionResponse.parse(actionView(outcome.completed, member)));
   },
 );
 
@@ -916,40 +1046,77 @@ router.post(
     const { member, organisation } = getOperationsContext(req);
     const params = RejectActionParams.safeParse(req.params);
     const body = RejectActionBody.safeParse(req.body ?? {});
-    if (!params.success || !body.success) {
-      res.status(400).json({ error: "Invalid action decision" });
+    if (!params.success || !body.success || !body.data.reason.trim()) {
+      res.status(400).json({ error: "A recorded rejection reason is required" });
       return;
     }
-    const [rejected] = await db
-      .update(actionRequestsTable)
-      .set({
-        status: "rejected",
+    const reason = body.data.reason.trim();
+    const outcome = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${params.data.actionId}))`,
+      );
+      const [action] = await tx
+        .select()
+        .from(actionRequestsTable)
+        .where(
+          and(
+            eq(actionRequestsTable.id, params.data.actionId),
+            eq(actionRequestsTable.organisationId, organisation.id),
+          ),
+        )
+        .limit(1);
+      if (!action) return { error: "not_found" as const };
+      if (action.requestedByMemberId === member.id) {
+        return { error: "self_decision" as const };
+      }
+      if (action.status !== "requested") {
+        return { error: "already_decided" as const };
+      }
+      const [rejected] = await tx
+        .update(actionRequestsTable)
+        .set({
+          status: "rejected",
+          decidedByMemberId: member.id,
+          decidedAt: new Date(),
+          decisionNote: reason,
+        })
+        .where(
+          and(
+            eq(actionRequestsTable.id, action.id),
+            eq(actionRequestsTable.status, "requested"),
+          ),
+        )
+        .returning();
+      if (!rejected) return { error: "already_decided" as const };
+      await tx.insert(approvalsTable).values({
+        organisationId: organisation.id,
+        actionRequestId: action.id,
         decidedByMemberId: member.id,
-        decidedAt: new Date(),
-        decisionNote: body.data.note ?? null,
-      })
-      .where(
-        and(
-          eq(actionRequestsTable.id, params.data.actionId),
-          eq(actionRequestsTable.organisationId, organisation.id),
-          eq(actionRequestsTable.status, "requested"),
-        ),
-      )
-      .returning();
-    if (!rejected) {
-      res.status(404).json({ error: "Action not found or already decided" });
+        decision: "rejected",
+        reason,
+      });
+      await tx.insert(auditEventsTable).values({
+        organisationId: organisation.id,
+        action: "action.rejected",
+        entityType: "action",
+        entityId: rejected.id,
+        actor: member.name,
+        role: member.role,
+        metadata: { runId: action.runId, actionType: action.actionType, reason },
+      });
+      return { rejected };
+    });
+    if ("error" in outcome) {
+      if (outcome.error === "not_found") {
+        res.status(404).json({ error: "Action not found" });
+      } else if (outcome.error === "self_decision") {
+        res.status(403).json({ error: "You cannot decide your own action request" });
+      } else {
+        res.status(409).json({ error: "Action is no longer awaiting approval" });
+      }
       return;
     }
-    await db.insert(auditEventsTable).values({
-      organisationId: organisation.id,
-      action: "action.rejected",
-      entityType: "action",
-      entityId: rejected.id,
-      actor: member.name,
-      role: member.role,
-      metadata: { note: body.data.note ?? null },
-    });
-    res.json(RejectActionResponse.parse(actionView(rejected)));
+    res.json(RejectActionResponse.parse(actionView(outcome.rejected, member)));
   },
 );
 
@@ -1034,19 +1201,22 @@ router.patch(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const [updated] = await db
-      .update(organisationsTable)
-      .set({ ...parsed.data, updatedAt: new Date() })
-      .where(eq(organisationsTable.id, organisation.id))
-      .returning();
-    await db.insert(auditEventsTable).values({
-      organisationId: organisation.id,
-      action: "settings.updated",
-      entityType: "organisation",
-      entityId: organisation.id,
-      actor: member.name,
-      role: member.role,
-      metadata: parsed.data,
+    const updated = await db.transaction(async (tx) => {
+      const [stored] = await tx
+        .update(organisationsTable)
+        .set({ ...parsed.data, updatedAt: new Date() })
+        .where(eq(organisationsTable.id, organisation.id))
+        .returning();
+      await tx.insert(auditEventsTable).values({
+        organisationId: organisation.id,
+        action: "settings.updated",
+        entityType: "organisation",
+        entityId: organisation.id,
+        actor: member.name,
+        role: member.role,
+        metadata: parsed.data,
+      });
+      return stored;
     });
     res.json(
       UpdateSettingsResponse.parse({

@@ -1,4 +1,5 @@
 import app from "./app";
+import { ensureOperationalAuditGuards } from "./lib/auditIntegrity";
 import { logger } from "./lib/logger";
 import { startProcessingScheduler } from "./lib/processingScheduler";
 
@@ -17,6 +18,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 let stopScheduler = async () => {};
+await ensureOperationalAuditGuards();
 const server = app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");

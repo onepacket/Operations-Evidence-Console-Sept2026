@@ -299,6 +299,7 @@ export const ListActionsResponseItem = zod.object({
   "rationale": zod.string(),
   "status": zod.enum(['requested', 'approved', 'rejected', 'running', 'completed', 'failed']),
   "requestedBy": zod.string(),
+  "canDecide": zod.boolean(),
   "requestedAt": zod.coerce.date(),
   "decidedAt": zod.coerce.date().nullish(),
   "decisionNote": zod.string().nullish(),
@@ -329,6 +330,7 @@ export const RequestActionResponse = zod.object({
   "rationale": zod.string(),
   "status": zod.enum(['requested', 'approved', 'rejected', 'running', 'completed', 'failed']),
   "requestedBy": zod.string(),
+  "canDecide": zod.boolean(),
   "requestedAt": zod.coerce.date(),
   "decidedAt": zod.coerce.date().nullish(),
   "decisionNote": zod.string().nullish(),
@@ -343,6 +345,14 @@ export const ApproveActionParams = zod.object({
   "actionId": zod.coerce.string().uuid()
 })
 
+export const approveActionBodyReasonMax = 1000;
+
+
+
+export const ApproveActionBody = zod.object({
+  "reason": zod.string().min(1).max(approveActionBodyReasonMax)
+})
+
 export const ApproveActionResponse = zod.object({
   "id": zod.string().uuid(),
   "runId": zod.string().uuid(),
@@ -351,6 +361,7 @@ export const ApproveActionResponse = zod.object({
   "rationale": zod.string(),
   "status": zod.enum(['requested', 'approved', 'rejected', 'running', 'completed', 'failed']),
   "requestedBy": zod.string(),
+  "canDecide": zod.boolean(),
   "requestedAt": zod.coerce.date(),
   "decidedAt": zod.coerce.date().nullish(),
   "decisionNote": zod.string().nullish(),
@@ -365,8 +376,12 @@ export const RejectActionParams = zod.object({
   "actionId": zod.coerce.string().uuid()
 })
 
+export const rejectActionBodyReasonMax = 1000;
+
+
+
 export const RejectActionBody = zod.object({
-  "note": zod.string().optional()
+  "reason": zod.string().min(1).max(rejectActionBodyReasonMax)
 })
 
 export const RejectActionResponse = zod.object({
@@ -377,6 +392,7 @@ export const RejectActionResponse = zod.object({
   "rationale": zod.string(),
   "status": zod.enum(['requested', 'approved', 'rejected', 'running', 'completed', 'failed']),
   "requestedBy": zod.string(),
+  "canDecide": zod.boolean(),
   "requestedAt": zod.coerce.date(),
   "decidedAt": zod.coerce.date().nullish(),
   "decisionNote": zod.string().nullish(),

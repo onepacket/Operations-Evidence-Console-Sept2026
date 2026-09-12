@@ -1055,14 +1055,29 @@ export const getApproveActionUrl = (actionId: string,) => {
 /**
  * @summary Approve and run a follow-up action
  */
-export const approveAction = async (actionId: string, options?: Parameters<typeof customFetch>[1]): Promise<ActionRequest> => {
+export const approveAction = async (actionId: string,
+    actionDecisionInput: ActionDecisionInput, options?: Parameters<typeof customFetch>[1]): Promise<ActionRequest> => {
 
-  return customFetch<ActionRequest>(getApproveActionUrl(actionId),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<ActionRequest>(getApproveActionUrl(actionId),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(actionDecisionInput)
   }
 );}
 
@@ -1087,9 +1102,9 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof approveAction>>, ApproveActionMutationVariables> = (props) => {
-          const {actionId} = props ?? {};
+          const {actionId,data} = props ?? {};
 
-          return  approveAction(actionId,requestOptions)
+          return  approveAction(actionId,data,requestOptions)
         }
 
 
@@ -1100,9 +1115,9 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
   return  { mutationFn, ...mutationOptions }}
 
     export type ApproveActionMutationResult = NonNullable<Awaited<ReturnType<typeof approveAction>>>
-
+    export type ApproveActionMutationBody = BodyType<ActionDecisionInput>
     export type ApproveActionMutationError = ErrorType<ErrorEnvelope>
-    export type ApproveActionMutationVariables = {actionId: string}
+    export type ApproveActionMutationVariables = {actionId: string;data: BodyType<ActionDecisionInput>}
 
     /**
  * @summary Approve and run a follow-up action

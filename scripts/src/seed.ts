@@ -1,10 +1,16 @@
 import { createClerkClient } from "@clerk/backend";
-import { sql } from "drizzle-orm";
 import { db, membersTable, organisationsTable, pool } from "@workspace/db";
 
 const organisationCode = "NORTHSTAR-OPS";
-const demoPassword =
-  process.env.DEMO_USER_PASSWORD ?? "ProofOpsDemo!2026";
+const demoPassword = (() => {
+  const value = process.env.DEMO_USER_PASSWORD;
+  if (!value) {
+    throw new Error(
+      "DEMO_USER_PASSWORD is required to create demo Clerk accounts.",
+    );
+  }
+  return value;
+})();
 
 const demoUsers = [
   {
@@ -54,21 +60,6 @@ async function seed() {
   }
   const clerk = createClerkClient({ secretKey });
 
-  await db.execute(sql.raw(`
-    CREATE OR REPLACE FUNCTION operations_reject_audit_mutation()
-    RETURNS trigger AS $$
-    BEGIN
-      RAISE EXCEPTION 'operations_audit_events is append-only';
-    END;
-    $$ LANGUAGE plpgsql;
-
-    DROP TRIGGER IF EXISTS operations_audit_events_append_only
-      ON operations_audit_events;
-    CREATE TRIGGER operations_audit_events_append_only
-      BEFORE UPDATE OR DELETE ON operations_audit_events
-      FOR EACH ROW EXECUTE FUNCTION operations_reject_audit_mutation();
-  `));
-
   const [organisation] = await db
     .insert(organisationsTable)
     .values({
@@ -112,11 +103,7 @@ async function seed() {
   for (const user of demoUsers) {
     console.log(`- ${user.role}: ${user.email}`);
   }
-  console.log(
-    process.env.DEMO_USER_PASSWORD
-      ? "Demo users use the password supplied in DEMO_USER_PASSWORD."
-      : `Demo password: ${demoPassword}`,
-  );
+  console.log("Demo users use the password supplied in DEMO_USER_PASSWORD.");
 }
 
 seed()

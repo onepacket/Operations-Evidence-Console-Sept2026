@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { getAuth } from "@clerk/express";
 import type { NextFunction, Request, Response } from "express";
 import { and, eq } from "drizzle-orm";
 
 import {
   db,
+  auditEventsTable,
   membersTable,
   organisationsTable,
   type Member,
@@ -50,6 +52,29 @@ export async function requireOperationsAuth(
   }
 
   (req as AuthenticatedRequest).operationsContext = context;
+  if (auth.sessionId) {
+    const authSessionKey = createHash("sha256")
+      .update(auth.sessionId)
+      .digest("hex");
+    await db
+      .insert(auditEventsTable)
+      .values({
+        organisationId: context.organisation.id,
+        action: "auth.signed_in",
+        entityType: "session",
+        entityId: authSessionKey,
+        actor: context.member.name,
+        role: context.member.role,
+        authSessionKey,
+      })
+      .onConflictDoNothing({
+        target: [
+          auditEventsTable.organisationId,
+          auditEventsTable.action,
+          auditEventsTable.authSessionKey,
+        ],
+      });
+  }
   next();
 }
 

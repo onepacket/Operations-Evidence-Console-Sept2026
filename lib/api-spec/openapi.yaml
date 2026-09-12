@@ -303,6 +303,12 @@ paths:
       summary: Approve and run a follow-up action
       parameters:
         - $ref: "#/components/parameters/ActionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionDecisionInput"
       responses:
         "200":
           description: Approved action result.
@@ -694,7 +700,7 @@ components:
         promptVersion: { type: string }
     ActionRequest:
       type: object
-      required: [id, runId, actionType, title, rationale, status, requestedBy, requestedAt]
+      required: [id, runId, actionType, title, rationale, status, requestedBy, requestedAt, canDecide]
       properties:
         id: { type: string, format: uuid }
         runId: { type: string, format: uuid }
@@ -707,6 +713,7 @@ components:
           type: string
           enum: [requested, approved, rejected, running, completed, failed]
         requestedBy: { type: string }
+        canDecide: { type: boolean }
         requestedAt: { type: string, format: date-time }
         decidedAt: { type: ["string", "null"], format: date-time }
         decisionNote: { type: ["string", "null"] }
@@ -723,8 +730,9 @@ components:
         rationale: { type: string, minLength: 1 }
     ActionDecisionInput:
       type: object
+      required: [reason]
       properties:
-        note: { type: string }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
     AuditEvent:
       type: object
       required: [id, action, entityType, entityId, actor, role, createdAt]

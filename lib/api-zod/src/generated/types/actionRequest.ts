@@ -16,6 +16,7 @@ export interface ActionRequest {
   rationale: string;
   status: ActionRequestStatus;
   requestedBy: string;
+  canDecide: boolean;
   requestedAt: Date;
   /** @nullable */
   decidedAt?: Date | null;
