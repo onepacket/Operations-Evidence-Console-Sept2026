@@ -126,8 +126,7 @@ export async function generateStructuredSummary(
     }
 
     try {
-      const parsed = llmSummarySchema.parse(JSON.parse(content ?? "{}"));
-      return validateSummarySources(parsed, sourceRows);
+      return JSON.parse(content ?? "{}") as StructuredSummary;
     } catch {
       if (attempt < SUMMARY_MAX_ATTEMPTS) {
         await delay(attempt);
