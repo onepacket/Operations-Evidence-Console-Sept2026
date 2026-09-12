@@ -1,1 +1,2 @@
 - [Ingestion concurrency](ingestion-concurrency.md) — preserve claim fencing, content-hash serialization, and bounded cancellation when changing import processing.
+- [Webhook audit trust](webhook-audit-trust.md) — keep claimed and verified tenant identity separate when recording unauthenticated webhook refusals.

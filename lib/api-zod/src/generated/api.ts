@@ -448,6 +448,10 @@ export const RequestUploadUrlResponse = zod.object({
 
 
 /**
+ * Sign the exact UTF-8 request-body bytes with HMAC-SHA256 using
+ * `INBOUND_WEBHOOK_SECRET`. The signed message is
+ * `<unix timestamp>.<source>.<raw request body>` and the signature header
+ * contains the lowercase hexadecimal digest.
  * @summary Receive a signed external event
  */
 export const ReceiveInboundEventHeader = zod.object({

@@ -393,6 +393,11 @@ paths:
       operationId: receiveInboundEvent
       tags: [integrations]
       summary: Receive a signed external event
+      description: |
+        Sign the exact UTF-8 request-body bytes with HMAC-SHA256 using
+        `INBOUND_WEBHOOK_SECRET`. The signed message is
+        `<unix timestamp>.<source>.<raw request body>` and the signature header
+        contains the lowercase hexadecimal digest.
       parameters:
         - name: x-operations-signature
           in: header

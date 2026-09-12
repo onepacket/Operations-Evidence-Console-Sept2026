@@ -4,12 +4,9 @@ import { desc, eq } from "drizzle-orm";
 
 import { db, organisationsTable, runsTable } from "@workspace/db";
 
-const secret =
-  process.env.INBOUND_WEBHOOK_SECRET ?? process.env.SESSION_SECRET;
+const secret = process.env.INBOUND_WEBHOOK_SECRET;
 if (!secret) {
-  throw new Error(
-    "INBOUND_WEBHOOK_SECRET or SESSION_SECRET must be configured.",
-  );
+  throw new Error("INBOUND_WEBHOOK_SECRET must be configured.");
 }
 
 const apiBaseUrl =

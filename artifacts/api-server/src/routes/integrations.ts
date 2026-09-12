@@ -53,6 +53,7 @@ async function refuseInboundEvent(
     source,
     externalId,
     organisationId,
+    verifiedOrganisationId,
     deliveryId,
   }: {
     status: number;
@@ -60,6 +61,7 @@ async function refuseInboundEvent(
     source: string;
     externalId?: string;
     organisationId?: string;
+    verifiedOrganisationId?: string;
     deliveryId?: string;
   },
 ) {
@@ -74,6 +76,7 @@ async function refuseInboundEvent(
       source,
       externalId,
       organisationId,
+      verifiedOrganisationId,
       deliveryId,
     });
   } catch (error) {
@@ -115,15 +118,6 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
   }
 
   const timestamp = headers.data["x-operations-timestamp"];
-  if (Math.abs(Date.now() / 1000 - timestamp) > 300) {
-    await refuseInboundEvent(req, res, {
-      ...refusalContext,
-      status: 408,
-      reason: "Event timestamp is outside the five-minute window",
-    });
-    return;
-  }
-
   const secret = process.env.INBOUND_WEBHOOK_SECRET;
   if (!secret) {
     req.log.error("Inbound webhook secret is not configured");
@@ -142,24 +136,44 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     return;
   }
 
+  const claimedOrganisationId = refusalContext.organisationId;
+  const [verifiedOrganisation] =
+    claimedOrganisationId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      claimedOrganisationId,
+    )
+      ? await db
+          .select({ id: organisationsTable.id })
+          .from(organisationsTable)
+          .where(eq(organisationsTable.id, claimedOrganisationId))
+          .limit(1)
+      : [];
+  const verifiedRefusalContext = {
+    ...refusalContext,
+    verifiedOrganisationId: verifiedOrganisation?.id,
+  };
+  if (Math.abs(Date.now() / 1000 - timestamp) > 300) {
+    await refuseInboundEvent(req, res, {
+      ...verifiedRefusalContext,
+      status: 408,
+      reason: "Event timestamp is outside the five-minute window",
+    });
+    return;
+  }
+
   const body = ReceiveInboundEventBody.safeParse(req.body);
   if (!body.success) {
     await refuseInboundEvent(req, res, {
-      ...refusalContext,
+      ...verifiedRefusalContext,
       status: 400,
       reason: body.error.message,
     });
     return;
   }
 
-  const [organisation] = await db
-    .select({ id: organisationsTable.id })
-    .from(organisationsTable)
-    .where(eq(organisationsTable.id, body.data.organisationId))
-    .limit(1);
-  if (!organisation) {
+  if (!verifiedOrganisation) {
     await refuseInboundEvent(req, res, {
-      ...refusalContext,
+      ...verifiedRefusalContext,
       status: 404,
       reason: "Organisation not found",
     });
@@ -203,7 +217,7 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
   });
   if (!delivery) {
     await refuseInboundEvent(req, res, {
-      ...refusalContext,
+      ...verifiedRefusalContext,
       status: 409,
       reason: "A delivery with this source and external id was already received",
     });

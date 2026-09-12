@@ -278,6 +278,10 @@ export const inboundRefusalAuditTable = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     organisationId: text("organisation_id"),
+    verifiedOrganisationId: uuid("verified_organisation_id").references(
+      () => organisationsTable.id,
+      { onDelete: "set null" },
+    ),
     source: text("source").notNull(),
     externalId: text("external_id"),
     deliveryId: text("delivery_id"),

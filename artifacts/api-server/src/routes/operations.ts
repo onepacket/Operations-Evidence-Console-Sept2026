@@ -718,7 +718,7 @@ router.get("/audit", async (req, res): Promise<void> => {
     db
       .select()
       .from(inboundRefusalAuditTable)
-      .where(eq(inboundRefusalAuditTable.organisationId, organisation.id))
+      .where(eq(inboundRefusalAuditTable.verifiedOrganisationId, organisation.id))
       .orderBy(desc(inboundRefusalAuditTable.createdAt))
       .limit(parsed.data.limit),
   ]);

@@ -6,6 +6,7 @@ export interface InboundRefusalContext {
   source: string;
   externalId?: string;
   organisationId?: string;
+  verifiedOrganisationId?: string;
   deliveryId?: string;
 }
 
@@ -14,6 +15,7 @@ export async function recordInboundRefusal(
 ) {
   await db.insert(inboundRefusalAuditTable).values({
     organisationId: context.organisationId,
+    verifiedOrganisationId: context.verifiedOrganisationId,
     source: context.source,
     externalId: context.externalId,
     deliveryId: context.deliveryId,
