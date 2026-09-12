@@ -177,21 +177,16 @@ router.post("/webhooks/inbound", async (req, res): Promise<void> => {
     return;
   }
 
-  const internalDeliveryId = inboundDeliveryKey(source, body.data.eventId);
+  const internalDeliveryId = crypto.randomUUID();
   const delivery = await db.transaction(async (tx) => {
     const [stored] = await tx.insert(inboundDeliveriesTable).values({
       deliveryId: internalDeliveryId,
       source,
-      externalId: body.data.eventId,
+      externalId: internalDeliveryId,
       eventId: body.data.eventId,
       organisationId: body.data.organisationId,
       eventType: body.data.eventType,
       payload: body.data.payload,
-    }).onConflictDoNothing({
-      target: [
-        inboundDeliveriesTable.source,
-        inboundDeliveriesTable.externalId,
-      ],
     }).returning({ id: inboundDeliveriesTable.id });
     if (!stored) return null;
     await tx.insert(auditEventsTable).values({
