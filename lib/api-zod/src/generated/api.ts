@@ -51,7 +51,7 @@ export const GetDashboardResponse = zod.object({
   "retryCount": zod.number().int(),
   "createdAt": zod.coerce.date(),
   "completedAt": zod.coerce.date().nullish(),
-  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed'])
+  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed', 'timeout', 'rate_limited', 'malformed_output'])
 }))
 })
 
@@ -79,7 +79,7 @@ export const ListRunsResponseItem = zod.object({
   "retryCount": zod.number().int(),
   "createdAt": zod.coerce.date(),
   "completedAt": zod.coerce.date().nullish(),
-  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed'])
+  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed', 'timeout', 'rate_limited', 'malformed_output'])
 })
 export const ListRunsResponse = zod.array(ListRunsResponseItem)
 
@@ -112,7 +112,7 @@ export const CreateRunResponse = zod.object({
   "retryCount": zod.number().int(),
   "createdAt": zod.coerce.date(),
   "completedAt": zod.coerce.date().nullish(),
-  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed'])
+  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed', 'timeout', 'rate_limited', 'malformed_output'])
 })
 
 
@@ -137,7 +137,7 @@ export const GetRunResponse = zod.object({
   "retryCount": zod.number().int(),
   "createdAt": zod.coerce.date(),
   "completedAt": zod.coerce.date().nullish(),
-  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed'])
+  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed', 'timeout', 'rate_limited', 'malformed_output'])
 }).and(zod.object({
   "acceptedRows": zod.array(zod.object({
   "id": zod.string().uuid(),
@@ -183,7 +183,7 @@ export const ProcessRunResponse = zod.object({
   "retryCount": zod.number().int(),
   "createdAt": zod.coerce.date(),
   "completedAt": zod.coerce.date().nullish(),
-  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed'])
+  "summaryStatus": zod.enum(['not_started', 'generating', 'ready', 'failed', 'timeout', 'rate_limited', 'malformed_output'])
 })
 
 
@@ -215,19 +215,31 @@ export const GetRunSummaryParams = zod.object({
   "runId": zod.coerce.string().uuid()
 })
 
+
+
+
+
+
+
+
+
 export const GetRunSummaryResponse = zod.object({
   "id": zod.string().uuid(),
   "runId": zod.string().uuid(),
   "headline": zod.string(),
+  "headlineSourceRows": zod.array(zod.number().int().min(1)).min(1),
   "overview": zod.string(),
+  "overviewSourceRows": zod.array(zod.number().int().min(1)).min(1),
   "riskLevel": zod.enum(['low', 'medium', 'high', 'critical']),
   "findings": zod.array(zod.object({
   "title": zod.string(),
   "detail": zod.string(),
-  "severity": zod.enum(['low', 'medium', 'high', 'critical'])
+  "severity": zod.enum(['low', 'medium', 'high', 'critical']),
+  "sourceRowNumbers": zod.array(zod.number().int().min(1)).min(1)
 })),
   "generatedAt": zod.coerce.date(),
-  "model": zod.string()
+  "model": zod.string(),
+  "promptVersion": zod.string()
 })
 
 
@@ -244,19 +256,31 @@ export const GenerateRunSummaryBody = zod.object({
   "forceRegenerate": zod.boolean().default(generateRunSummaryBodyForceRegenerateDefault)
 })
 
+
+
+
+
+
+
+
+
 export const GenerateRunSummaryResponse = zod.object({
   "id": zod.string().uuid(),
   "runId": zod.string().uuid(),
   "headline": zod.string(),
+  "headlineSourceRows": zod.array(zod.number().int().min(1)).min(1),
   "overview": zod.string(),
+  "overviewSourceRows": zod.array(zod.number().int().min(1)).min(1),
   "riskLevel": zod.enum(['low', 'medium', 'high', 'critical']),
   "findings": zod.array(zod.object({
   "title": zod.string(),
   "detail": zod.string(),
-  "severity": zod.enum(['low', 'medium', 'high', 'critical'])
+  "severity": zod.enum(['low', 'medium', 'high', 'critical']),
+  "sourceRowNumbers": zod.array(zod.number().int().min(1)).min(1)
 })),
   "generatedAt": zod.coerce.date(),
-  "model": zod.string()
+  "model": zod.string(),
+  "promptVersion": zod.string()
 })
 
 

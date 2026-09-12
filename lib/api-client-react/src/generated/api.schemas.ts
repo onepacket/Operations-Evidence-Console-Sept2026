@@ -11,6 +11,8 @@ export interface HealthStatus {
 
 export interface ErrorEnvelope {
   error: string;
+  code?: string;
+  retryable?: boolean;
 }
 
 export type Role = typeof Role[keyof typeof Role];
@@ -55,6 +57,9 @@ export const RunSummaryStatus = {
   generating: 'generating',
   ready: 'ready',
   failed: 'failed',
+  timeout: 'timeout',
+  rate_limited: 'rate_limited',
+  malformed_output: 'malformed_output',
 } as const;
 
 export interface Run {
@@ -180,17 +185,33 @@ export type EvidenceSummaryFindingsItem = {
   title: string;
   detail: string;
   severity: EvidenceSummaryFindingsItemSeverity;
+  /**
+     * @minItems 1
+     * @items.minimum 1
+     */
+  sourceRowNumbers: number[];
 };
 
 export interface EvidenceSummary {
   id: string;
   runId: string;
   headline: string;
+  /**
+     * @minItems 1
+     * @items.minimum 1
+     */
+  headlineSourceRows: number[];
   overview: string;
+  /**
+     * @minItems 1
+     * @items.minimum 1
+     */
+  overviewSourceRows: number[];
   riskLevel: EvidenceSummaryRiskLevel;
   findings: EvidenceSummaryFindingsItem[];
   generatedAt: string;
   model: string;
+  promptVersion: string;
 }
 
 export type ActionRequestActionType = typeof ActionRequestActionType[keyof typeof ActionRequestActionType];

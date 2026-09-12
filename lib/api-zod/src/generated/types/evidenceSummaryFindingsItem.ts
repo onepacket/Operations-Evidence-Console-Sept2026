@@ -11,4 +11,9 @@ export type EvidenceSummaryFindingsItem = {
   title: string;
   detail: string;
   severity: EvidenceSummaryFindingsItemSeverity;
+  /**
+     * @minItems 1
+     * @items.minimum 1
+     */
+  sourceRowNumbers: number[];
 };

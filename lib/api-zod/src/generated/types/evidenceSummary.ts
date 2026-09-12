@@ -12,9 +12,20 @@ export interface EvidenceSummary {
   id: string;
   runId: string;
   headline: string;
+  /**
+     * @minItems 1
+     * @items.minimum 1
+     */
+  headlineSourceRows: number[];
   overview: string;
+  /**
+     * @minItems 1
+     * @items.minimum 1
+     */
+  overviewSourceRows: number[];
   riskLevel: EvidenceSummaryRiskLevel;
   findings: EvidenceSummaryFindingsItem[];
   generatedAt: Date;
   model: string;
+  promptVersion: string;
 }

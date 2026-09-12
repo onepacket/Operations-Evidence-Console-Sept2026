@@ -8,4 +8,6 @@
 
 export interface ErrorEnvelope {
   error: string;
+  code?: string;
+  retryable?: boolean;
 }

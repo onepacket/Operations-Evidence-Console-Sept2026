@@ -14,4 +14,7 @@ export const RunSummaryStatus = {
   generating: 'generating',
   ready: 'ready',
   failed: 'failed',
+  timeout: 'timeout',
+  rate_limited: 'rate_limited',
+  malformed_output: 'malformed_output',
 } as const;
