@@ -306,7 +306,6 @@ router.get("/runs/:runId", async (req, res): Promise<void> => {
     .where(
       and(
         eq(runsTable.id, parsed.data.runId),
-        eq(runsTable.organisationId, organisation.id),
       ),
     )
     .limit(1);
