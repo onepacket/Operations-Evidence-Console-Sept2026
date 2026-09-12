@@ -29,7 +29,7 @@ import type {
   Run, ValidationException,
 } from '@workspace/api-client-react';
 import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
-import { ErrorBoundary } from '@/components/error-boundary';
+import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -119,6 +119,32 @@ function initials(name?: string) {
 function statusLabel(value?: string) {
   return (value || 'unknown').replaceAll('_', ' ');
 }
+function networkStatus(error: unknown) {
+  return (error as { response?: { status?: number } } | undefined)?.response?.status;
+}
+async function validateUploadContent(file: File) {
+  try {
+    const sample = await file.slice(0, Math.min(file.size, 64 * 1024)).text();
+    if (sample.includes('\0')) return 'The selected file appears to contain binary data.';
+    const isJson = /\.json$/i.test(file.name) || file.type.includes('json');
+    if (isJson) {
+      const first = sample.trimStart()[0];
+      if (first !== '{' && first !== '[') return 'The selected JSON file does not begin with an object or array.';
+      if (file.size <= 5 * 1024 * 1024) {
+        try {
+          JSON.parse(await file.text());
+        } catch {
+          return 'The selected JSON file is not valid JSON.';
+        }
+      }
+    } else if (!/[\n,;\t]/.test(sample)) {
+      return 'The selected CSV file does not contain a recognizable row or delimiter.';
+    }
+    return '';
+  } catch {
+    return 'The selected file could not be read in this browser.';
+  }
+}
 
 function StatusPill({ value, tone }: { value?: string; tone?: 'success' | 'warning' | 'danger' | 'neutral' }) {
   const derived = tone || (value === 'succeeded' || value === 'approved' || value === 'ready' || value === 'completed' ? 'success' : value === 'failed' || value === 'critical' || value === 'rejected' ? 'danger' : value === 'queued' || value === 'running' || value === 'requested' || value === 'medium' || value === 'high' ? 'warning' : 'neutral');
@@ -132,8 +158,20 @@ function LoadingRows({ count = 4 }: { count?: number }) {
 function ErrorState({ message = 'We could not load this view.', retry }: { message?: string; retry?: () => void }) {
   return <div className="rounded-xl border border-[#e7bdb9] bg-[#fdf0ee] p-7 text-center" data-testid="error-state"><AlertCircle className="mx-auto mb-3 h-7 w-7 text-destructive" /><p className="font-semibold text-[#7c3934]">{message}</p><p className="mt-1 text-sm text-[#9d5c55]">Try again, or return in a moment.</p>{retry && <Button data-testid="button-retry" onClick={retry} variant="outline" className="mt-4 border-[#d9aaa4]">Retry</Button>}</div>;
 }
+function FieldError({ message }: { message?: string }) {
+  return message ? <p className="mt-1.5 text-xs text-destructive" role="alert">{message}</p> : null;
+}
 function EmptyState({ icon: Icon = FileCheck2, title, detail, action }: { icon?: typeof FileCheck2; title: string; detail: string; action?: ReactNode }) {
   return <div className="rounded-xl border border-dashed border-border bg-card/60 px-6 py-14 text-center" data-testid="empty-state"><div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-muted-foreground"><Icon className="h-6 w-6" /></div><h3 className="font-semibold">{title}</h3><p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">{detail}</p>{action && <div className="mt-5">{action}</div>}</div>;
+}
+
+function ScreenFailure({ screen, resetError }: ErrorFallbackProps & { screen: string }) {
+  return <section className="mx-auto max-w-2xl py-16"><ErrorState message={`${screen} could not be displayed safely.`} retry={resetError} /><div className="mt-3 text-center"><Link href="/dashboard" className="text-xs font-semibold text-[#627d18] hover:underline">Return to dashboard</Link></div></section>;
+}
+
+function ScreenBoundary({ screen, children }: { screen: string; children: ReactNode }) {
+  const [location] = useLocation();
+  return <ErrorBoundary resetKey={location} FallbackComponent={(props) => <ScreenFailure {...props} screen={screen} />}>{children}</ErrorBoundary>;
 }
 
 function Logo({ light = false }: { light?: boolean }) {
@@ -201,11 +239,17 @@ function NewRunPage() {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
-  const submitting = useRef(false);
+  const [networkError, setNetworkError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [retryRunId, setRetryRunId] = useState('');
   const uploadUrl = useRequestUploadUrl();
   const createRun = useCreateRun();
   const processRun = useProcessRun();
-  const user = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } }).data;
+  const userQuery = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } });
+  const user = userQuery.data;
+  if (userQuery.isLoading) return <PageFrame><LoadingRows count={4} /></PageFrame>;
+  if (userQuery.isError) return <PageFrame><ErrorState message="We could not confirm your upload access." retry={() => void userQuery.refetch()} /></PageFrame>;
+  if (!user) return <PageFrame><EmptyState icon={LockKeyhole} title="Upload access unavailable" detail="No organisation access was returned for this account." /></PageFrame>;
   if (user?.role === 'auditor') {
     return <PageFrame><EmptyState icon={LockKeyhole} title="Read-only access" detail="Auditors can inspect imports and evidence, but cannot upload or rerun data." action={<Link href="/runs"><Button variant="outline">View import runs</Button></Link>} /></PageFrame>;
   }
@@ -218,20 +262,72 @@ function NewRunPage() {
       setError('Choose a CSV or JSON file.');
       return;
     }
+    if (selected.size === 0) {
+      setError('The selected file is empty.');
+      return;
+    }
     if (selected.size > 250 * 1024 * 1024) {
       setError('Files must be 250 MB or smaller.');
       return;
     }
     setError('');
+    setNetworkError('');
+    setRetryRunId('');
     setFile(selected);
   };
-  const submit = () => {
+  const startProcessing = (runId: string) => {
+    processRun.mutate(
+      { runId },
+      {
+        onSuccess: () => {
+          setSubmitting(false);
+          setRetryRunId('');
+          setLocation(`/runs/${runId}/exceptions`);
+        },
+        onError: () => {
+          setSubmitting(false);
+          setRetryRunId(runId);
+          setNetworkError('The file is saved, but processing could not start. Retry without selecting the file again.');
+        },
+        onSettled: () => {
+          void queryClient.invalidateQueries({ queryKey: getGetRunQueryKey(runId) });
+          void queryClient.invalidateQueries({ queryKey: getListRunExceptionsQueryKey(runId) });
+          void queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
+        },
+      },
+    );
+  };
+  const submit = async () => {
+    setNetworkError('');
     if (!file) {
       setError('Select a file before continuing.');
       return;
     }
-    if (submitting.current) return;
-    submitting.current = true;
+    const validType = ['text/csv', 'application/json', 'application/vnd.api+json'].includes(file.type) || /\.(csv|json)$/i.test(file.name);
+    if (!validType) {
+      setError('Choose a CSV or JSON file.');
+      return;
+    }
+    if (file.size === 0) {
+      setError('The selected file is empty.');
+      return;
+    }
+    if (file.size > 250 * 1024 * 1024) {
+      setError('Files must be 250 MB or smaller.');
+      return;
+    }
+    const contentError = await validateUploadContent(file);
+    if (contentError) {
+      setError(contentError);
+      return;
+    }
+    setError('');
+    if (submitting) return;
+    setSubmitting(true);
+    if (retryRunId) {
+      startProcessing(retryRunId);
+      return;
+    }
     uploadUrl.mutate(
       {
         data: {
@@ -263,39 +359,32 @@ function NewRunPage() {
                 onSuccess: (run) => {
                   queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
                   if (run.status === 'queued' || run.status === 'failed') {
-                    processRun.mutate(
-                      { runId: run.id },
-                      {
-                        onSettled: () => {
-                          queryClient.invalidateQueries({ queryKey: getGetRunQueryKey(run.id) });
-                          queryClient.invalidateQueries({ queryKey: getListRunExceptionsQueryKey(run.id) });
-                          queryClient.invalidateQueries({ queryKey: getListRunsQueryKey() });
-                        },
-                      },
-                    );
+                    startProcessing(run.id);
+                  } else {
+                    setSubmitting(false);
+                    setLocation(`/runs/${run.id}/exceptions`);
                   }
-                  setLocation(`/runs/${run.id}/exceptions`);
                 },
                 onError: () => {
-                  submitting.current = false;
-                  setError('The run could not be created. Please try again.');
+                  setSubmitting(false);
+                  setNetworkError('The run could not be created. Your file selection has been kept.');
                 },
               },
             );
           } catch {
-            submitting.current = false;
-            setError('The file upload did not complete. Please try again.');
+            setSubmitting(false);
+            setNetworkError('The file upload did not complete. Your file selection has been kept.');
           }
         },
         onError: () => {
-          submitting.current = false;
-          setError('We could not prepare the secure upload. Please try again.');
+          setSubmitting(false);
+          setNetworkError('We could not prepare the secure upload. Your file selection has been kept.');
         },
       },
     );
   };
-  const pending = uploadUrl.isPending || createRun.isPending;
-  return <PageFrame><PageIntro eyebrow="Evidence intake / new" title="Start an import" detail="Upload one operational file. We will validate it, isolate exceptions, and prepare a defensible summary." action={<Link href="/runs" data-testid="link-new-run-cancel"><Button variant="outline">Cancel</Button></Link>} /><div className="mx-auto max-w-3xl"><div className={`rounded-2xl border-2 border-dashed p-8 text-center transition-colors md:p-16 ${dragging ? 'border-[#718e1f] bg-[#f1f6dc]' : 'border-border bg-card'}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files?.[0]); }} data-testid="dropzone-upload"><input id="file-upload" data-testid="input-file-upload" type="file" className="sr-only" accept=".csv,.json,application/json,text/csv" onChange={(e) => handleFile(e.target.files?.[0])} /><label htmlFor="file-upload" className="cursor-pointer"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eaf0d0] text-[#627d18]"><UploadCloud className="h-7 w-7" /></span><h2 className="mt-5 text-xl font-semibold">{file ? file.name : 'Drop your file here'}</h2><p className="mt-2 text-sm text-muted-foreground">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ready for secure upload` : 'or click to browse · CSV or JSON up to 250 MB'}</p></label>{file && <button data-testid="button-remove-file" onClick={() => setFile(null)} className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-destructive hover:underline"><X className="h-3.5 w-3.5" />Remove selection</button>}</div>{error && <p data-testid="text-upload-error" className="mt-3 flex items-center gap-2 text-sm text-destructive"><AlertCircle className="h-4 w-4" />{error}</p>}<div className="mt-6 flex items-start gap-3 rounded-xl border border-border bg-card p-4"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[#627d18]" /><div><p className="text-sm font-semibold">Private by default</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Files are sent directly to encrypted object storage. Access is limited to your organisation and every processing step is recorded.</p></div></div><Button data-testid="button-create-run" disabled={!file || pending || submitting.current} onClick={submit} className="mt-6 h-11 w-full bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{pending || submitting.current ? <><Loader2 className="animate-spin" />Preparing secure run…</> : <>Create queued run <ArrowRight /></>}</Button></div></PageFrame>;
+  const pending = uploadUrl.isPending || createRun.isPending || processRun.isPending || submitting;
+  return <PageFrame><PageIntro eyebrow="Evidence intake / new" title="Start an import" detail="Upload one operational file. We will validate it, isolate exceptions, and prepare a defensible summary." action={<Link href="/runs" data-testid="link-new-run-cancel"><Button variant="outline">Cancel</Button></Link>} /><div className="mx-auto max-w-3xl"><div className={`rounded-2xl border-2 border-dashed p-8 text-center transition-colors md:p-16 ${dragging ? 'border-[#718e1f] bg-[#f1f6dc]' : 'border-border bg-card'}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files?.[0]); }} data-testid="dropzone-upload"><input id="file-upload" data-testid="input-file-upload" type="file" className="sr-only" accept=".csv,.json,application/json,text/csv" onChange={(e) => handleFile(e.target.files?.[0])} /><label htmlFor="file-upload" className="cursor-pointer"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eaf0d0] text-[#627d18]"><UploadCloud className="h-7 w-7" /></span><h2 className="mt-5 text-xl font-semibold">{file ? file.name : 'Drop your file here'}</h2><p className="mt-2 text-sm text-muted-foreground">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · ready for secure upload` : 'or click to browse · CSV or JSON up to 250 MB'}</p></label>{file && <button data-testid="button-remove-file" onClick={() => { setFile(null); setError(''); setNetworkError(''); setRetryRunId(''); }} className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-destructive hover:underline"><X className="h-3.5 w-3.5" />Remove selection</button>}</div><FieldError message={error} />{networkError && <div className="mt-3 rounded-lg border border-[#e7bdb9] bg-[#fdf0ee] p-4"><p className="text-sm text-[#7c3934]">{networkError}</p><Button data-testid="button-retry-upload" onClick={submit} disabled={pending} variant="outline" className="mt-3 border-[#d9aaa4]"><RefreshCw /> Retry</Button></div>}<div className="mt-6 flex items-start gap-3 rounded-xl border border-border bg-card p-4"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[#627d18]" /><div><p className="text-sm font-semibold">Private by default</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Files are sent directly to encrypted object storage. Access is limited to your organisation and every processing step is recorded.</p></div></div><Button data-testid="button-create-run" disabled={!file || pending} onClick={submit} className="mt-6 h-11 w-full bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{pending ? <><Loader2 className="animate-spin" />Preparing secure run…</> : retryRunId ? <><RefreshCw />Retry processing</> : <>Create queued run <ArrowRight /></>}</Button></div></PageFrame>;
 }
 
 function RunHeader({ run, active }: { run?: Run; active: 'exceptions' | 'summary' }) {
@@ -336,7 +425,9 @@ function SummaryPage() {
   const [actionType, setActionType] = useState<'request_correction' | 'notify_owner' | 'create_review_task'>('request_correction');
   const [headline, setHeadline] = useState('');
   const [rationale, setRationale] = useState('');
-  const [error, setError] = useState('');
+  const [summaryMutationError, setSummaryMutationError] = useState('');
+  const [actionNetworkError, setActionNetworkError] = useState('');
+  const [actionFieldErrors, setActionFieldErrors] = useState<{ title?: string; rationale?: string }>({});
   const current = summary.data as EvidenceSummary | undefined;
   const canMutate = user?.role === 'analyst' || user?.role === 'administrator';
   const summaryStatus = run.data?.summaryStatus;
@@ -346,8 +437,9 @@ function SummaryPage() {
     malformed_output: { title: 'Summary output failed validation', detail: 'The model returned data that did not match the required evidence shape. No summary was stored.' },
   };
   const retryState = summaryStatus && retryLabels[summaryStatus] ? retryLabels[summaryStatus] : undefined;
+  const summaryMissing = summary.isError && networkStatus(summary.error) === 404;
   const generateSummary = () => {
-    setError('');
+    setSummaryMutationError('');
     generate.mutate(
       { runId, data: { forceRegenerate: Boolean(current) } },
       {
@@ -356,41 +448,51 @@ function SummaryPage() {
           void run.refetch();
         },
         onError: () => {
-          setError('Summary generation did not complete. The retry state is shown above.');
+          setSummaryMutationError('Summary generation did not complete. Your current summary and page state have been kept.');
           void run.refetch();
         },
       },
     );
   };
   const submitAction = () => {
-    if (!headline.trim() || !rationale.trim()) {
-      setError('Add a title and rationale before requesting an action.');
+    const errors: { title?: string; rationale?: string } = {};
+    const title = headline.trim();
+    const reason = rationale.trim();
+    if (!title) errors.title = 'Enter an action title.';
+    else if (title.length > 120) errors.title = 'Keep the title to 120 characters or fewer.';
+    if (!reason) errors.rationale = 'Explain why this action is needed.';
+    else if (reason.length > 2000) errors.rationale = 'Keep the rationale to 2,000 characters or fewer.';
+    setActionFieldErrors(errors);
+    setActionNetworkError('');
+    if (Object.keys(errors).length > 0) {
       return;
     }
-    requestAction.mutate({ data: { runId, actionType, title: headline, rationale } }, {
+    requestAction.mutate({ data: { runId, actionType, title, rationale: reason } }, {
       onSuccess: () => {
         setRequested(true);
         queryClient.invalidateQueries({ queryKey: getListActionsQueryKey() });
       },
-      onError: () => setError('The action request could not be submitted.'),
+      onError: () => setActionNetworkError('The action request could not be submitted. Your title and rationale have been kept.'),
     });
   };
   return <PageFrame>
     <RunHeader run={run.data} active="summary" />
-    {summary.isLoading || run.isLoading ? <LoadingRows count={5} /> : summary.isError && !current ? (
+    {summaryMutationError && <div className="mb-5"><ErrorState message={summaryMutationError} retry={generateSummary} /></div>}
+    {summary.isLoading || run.isLoading ? <LoadingRows count={5} /> : run.isError ? <ErrorState message="We could not load this import run." retry={() => void run.refetch()} /> : summary.isError && !current && !summaryMissing ? (
       retryState ? <section className="rounded-xl border border-[#ead9a8] bg-[#fff9e9] p-7" data-testid={`summary-retry-${summaryStatus}`}>
         <div className="flex items-start gap-3"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#8a5d17]" /><div><StatusPill value={summaryStatus} tone="warning" /><h2 className="mt-4 text-lg font-semibold text-[#6d4b16]">{retryState.title}</h2><p className="mt-2 text-sm text-[#8a6b35]">{retryState.detail}</p>{canMutate && <Button data-testid="button-retry-summary" disabled={generate.isPending} onClick={generateSummary} className="mt-5 bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{generate.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Retry summary</Button>}</div></div>
-      </section> : <div><EmptyState icon={Sparkles} title="Summary not generated" detail="Generate a structured read of this run once validation has completed." action={canMutate ? <Button data-testid="button-generate-summary" disabled={generate.isPending} onClick={generateSummary}>{generate.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />} Generate evidence summary</Button> : undefined} /></div>
-    ) : current ? <div className="grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
+      </section> : <ErrorState message="We could not load the evidence summary." retry={() => void summary.refetch()} />
+    ) : summaryMissing ? <div><EmptyState icon={Sparkles} title="Summary not generated" detail="Generate a structured read of this run once validation has completed." action={canMutate ? <Button data-testid="button-generate-summary" disabled={generate.isPending} onClick={generateSummary}>{generate.isPending ? <Loader2 className="animate-spin" /> : <Sparkles />} Generate evidence summary</Button> : undefined} /></div>
+    : current ? <div className="grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
       <div className="space-y-6">
         <section className="rounded-xl border border-border bg-card p-6 md:p-8">
           <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="mono text-[10px] uppercase tracking-[.18em] text-muted-foreground">Generated evidence / {formatDate(current.generatedAt)}</p><h2 data-testid="text-summary-headline" className="mt-4 max-w-2xl text-2xl font-bold leading-tight tracking-[-.03em]">{current.headline}</h2><SourceRows rows={current.headlineSourceRows} /></div><StatusPill value={current.riskLevel} /></div>
           <p className="mt-6 max-w-3xl text-[15px] leading-7 text-foreground/75">{current.overview}</p><SourceRows rows={current.overviewSourceRows} />
           <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 text-[11px] text-muted-foreground"><span>Model <span className="mono ml-1">{current.model}</span> · Prompt <span className="mono ml-1">{current.promptVersion}</span></span>{canMutate && <Button data-testid="button-regenerate-summary" variant="outline" size="sm" disabled={generate.isPending} onClick={generateSummary}>{generate.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Regenerate</Button>}</div>
         </section>
-        <section className="rounded-xl border border-border bg-card"><div className="border-b border-border px-6 py-4"><h2 className="font-semibold">Findings</h2><p className="mt-1 text-xs text-muted-foreground">Specific, reviewable observations from the source file.</p></div><div>{current.findings.map((finding, index) => <div key={`${finding.title}-${index}`} className="flex gap-4 border-b border-border/70 p-6 last:border-0"><span className="mono flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-[11px] font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{finding.title}</h3><StatusPill value={finding.severity} /></div><p className="mt-2 text-sm leading-6 text-muted-foreground">{finding.detail}</p><SourceRows rows={finding.sourceRowNumbers} /></div></div>)}</div></section>
+        <section className="rounded-xl border border-border bg-card"><div className="border-b border-border px-6 py-4"><h2 className="font-semibold">Findings</h2><p className="mt-1 text-xs text-muted-foreground">Specific, reviewable observations from the source file.</p></div>{current.findings.length ? <div>{current.findings.map((finding, index) => <div key={`${finding.title}-${index}`} className="flex gap-4 border-b border-border/70 p-6 last:border-0"><span className="mono flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-[11px] font-semibold text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{finding.title}</h3><StatusPill value={finding.severity} /></div><p className="mt-2 text-sm leading-6 text-muted-foreground">{finding.detail}</p><SourceRows rows={finding.sourceRowNumbers} /></div></div>)}</div> : <div className="p-5"><EmptyState title="No findings" detail="The generated summary did not identify any specific findings for this run." /></div>}</section>
       </div>
-      {canMutate ? <section className="rounded-xl border border-border bg-card p-6"><div className="mb-6 flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eaf0d0] text-[#627d18]"><Zap className="h-4 w-4" /></span><div><h2 className="font-semibold">Request follow-up</h2><p className="mt-1 text-xs text-muted-foreground">Turn this evidence into a controlled action.</p></div></div>{requested ? <div className="rounded-xl border border-[#cbdc9c] bg-[#f1f6dc] p-5"><CheckCircle2 className="h-6 w-6 text-[#627d18]" /><p className="mt-3 font-semibold text-[#52651a]">Action sent to the queue</p><p className="mt-1 text-sm text-[#6d7d3d]">An administrator will review the request before it runs.</p><Link href="/actions/queue" data-testid="link-summary-action-queue" className="mt-4 inline-flex text-xs font-semibold text-[#52651a] hover:underline">Open action queue <ArrowRight className="ml-1 h-4 w-4" /></Link></div> : <div className="space-y-4"><label className="block"><span className="mb-1.5 block text-xs font-semibold">Action type</span><select data-testid="select-action-type" value={actionType} onChange={(e) => setActionType(e.target.value as typeof actionType)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="request_correction">Request source correction</option><option value="notify_owner">Notify data owner</option><option value="create_review_task">Create review task</option></select></label><label className="block"><span className="mb-1.5 block text-xs font-semibold">Title</span><Input data-testid="input-action-title" value={headline} onChange={(e) => setHeadline(e.target.value)} placeholder="e.g. Correct missing owner codes" /></label><label className="block"><span className="mb-1.5 block text-xs font-semibold">Rationale</span><Textarea data-testid="textarea-action-rationale" value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="What should happen, and why does the evidence support it?" rows={5} /></label>{error && <p data-testid="text-summary-error" className="text-xs text-destructive">{error}</p>}<Button data-testid="button-request-action" disabled={requestAction.isPending} onClick={submitAction} className="w-full bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{requestAction.isPending ? <Loader2 className="animate-spin" /> : <ClipboardCheck />} Request approval</Button></div>}</section> : <section className="rounded-xl border border-border bg-card p-6"><LockKeyhole className="h-5 w-5 text-muted-foreground" /><h2 className="mt-4 font-semibold">Auditor read-only access</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">You can inspect the complete evidence summary and citations. Action requests and regeneration controls are unavailable.</p></section>}
+      {canMutate ? <section className="rounded-xl border border-border bg-card p-6"><div className="mb-6 flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eaf0d0] text-[#627d18]"><Zap className="h-4 w-4" /></span><div><h2 className="font-semibold">Request follow-up</h2><p className="mt-1 text-xs text-muted-foreground">Turn this evidence into a controlled action.</p></div></div>{requested ? <div className="rounded-xl border border-[#cbdc9c] bg-[#f1f6dc] p-5"><CheckCircle2 className="h-6 w-6 text-[#627d18]" /><p className="mt-3 font-semibold text-[#52651a]">Action sent to the queue</p><p className="mt-1 text-sm text-[#6d7d3d]">An administrator will review the request before it runs.</p><Link href="/actions/queue" data-testid="link-summary-action-queue" className="mt-4 inline-flex text-xs font-semibold text-[#52651a] hover:underline">Open action queue <ArrowRight className="ml-1 h-4 w-4" /></Link></div> : <div className="space-y-4"><label className="block"><span className="mb-1.5 block text-xs font-semibold">Action type</span><select data-testid="select-action-type" value={actionType} onChange={(e) => setActionType(e.target.value as typeof actionType)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="request_correction">Request source correction</option><option value="notify_owner">Notify data owner</option><option value="create_review_task">Create review task</option></select></label><label className="block"><span className="mb-1.5 block text-xs font-semibold">Title</span><Input data-testid="input-action-title" maxLength={121} value={headline} onChange={(e) => { setHeadline(e.target.value); setActionFieldErrors((value) => ({ ...value, title: undefined })); }} placeholder="e.g. Correct missing owner codes" /><FieldError message={actionFieldErrors.title} /></label><label className="block"><span className="mb-1.5 block text-xs font-semibold">Rationale</span><Textarea data-testid="textarea-action-rationale" maxLength={2001} value={rationale} onChange={(e) => { setRationale(e.target.value); setActionFieldErrors((value) => ({ ...value, rationale: undefined })); }} placeholder="What should happen, and why does the evidence support it?" rows={5} /><FieldError message={actionFieldErrors.rationale} /></label>{actionNetworkError && <div className="rounded-lg border border-[#e7bdb9] bg-[#fdf0ee] p-3"><p data-testid="text-summary-error" className="text-xs text-destructive">{actionNetworkError}</p><Button data-testid="button-retry-action-request" size="sm" variant="outline" className="mt-2" onClick={submitAction} disabled={requestAction.isPending}><RefreshCw /> Retry request</Button></div>}<Button data-testid="button-request-action" disabled={requestAction.isPending} onClick={submitAction} className="w-full bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{requestAction.isPending ? <Loader2 className="animate-spin" /> : <ClipboardCheck />} Request approval</Button></div>}</section> : <section className="rounded-xl border border-border bg-card p-6"><LockKeyhole className="h-5 w-5 text-muted-foreground" /><h2 className="mt-4 font-semibold">Auditor read-only access</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">You can inspect the complete evidence summary and citations. Action requests and regeneration controls are unavailable.</p></section>}
     </div> : <EmptyState icon={Sparkles} title="Summary unavailable" detail="Generate a summary once the run has completed processing." action={canMutate ? <Button onClick={generateSummary}>Generate summary</Button> : undefined} />}
   </PageFrame>;
 }
@@ -402,30 +504,38 @@ function ActionQueuePage() {
   const [busyId, setBusyId] = useState('');
   const [decision, setDecision] = useState<{ actionId: string; value: 'approve' | 'reject' } | null>(null);
   const [reason, setReason] = useState('');
-  const [error, setError] = useState('');
+  const [reasonError, setReasonError] = useState('');
+  const [decisionNetworkError, setDecisionNetworkError] = useState('');
   const submitDecision = () => {
-    if (!decision || !reason.trim()) {
-      setError('A reason is required for every decision.');
+    const cleanReason = reason.trim();
+    if (!decision || !cleanReason) {
+      setReasonError('A reason is required for every decision.');
+      return;
+    }
+    if (cleanReason.length > 1000) {
+      setReasonError('Keep the decision reason to 1,000 characters or fewer.');
       return;
     }
     setBusyId(decision.actionId);
-    setError('');
+    setReasonError('');
+    setDecisionNetworkError('');
     const options = {
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: getListActionsQueryKey() });
         setBusyId('');
         setDecision(null);
         setReason('');
+        setDecisionNetworkError('');
       },
       onError: () => {
         setBusyId('');
-        setError('The decision could not be recorded.');
+        setDecisionNetworkError('The decision could not be recorded. Your reason has been kept.');
       },
     };
-    if (decision.value === 'approve') approve.mutate({ actionId: decision.actionId, data: { reason: reason.trim() } }, options);
-    else reject.mutate({ actionId: decision.actionId, data: { reason: reason.trim() } }, options);
+    if (decision.value === 'approve') approve.mutate({ actionId: decision.actionId, data: { reason: cleanReason } }, options);
+    else reject.mutate({ actionId: decision.actionId, data: { reason: cleanReason } }, options);
   };
-  return <PageFrame><PageIntro eyebrow="Governance" title="Action queue" detail="Review proposed follow-up actions before they affect an operational system." /><div className="mb-5 flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-semibold"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#f8edcf] text-xs text-[#8a5d17]">{actions.data?.filter((item) => item.status === 'requested').length || 0}</span>Awaiting decision</div><span className="text-xs text-muted-foreground">Independent administrator approval · all decisions are audited</span></div>{actions.isLoading ? <LoadingRows /> : actions.isError ? <ErrorState retry={() => actions.refetch()} /> : !actions.data?.length ? <EmptyState icon={ClipboardCheck} title="Queue is clear" detail="No follow-up actions are waiting for approval." /> : <div className="space-y-3">{actions.data.map((action) => <section key={action.id} data-testid={`card-action-${action.id}`} className="rounded-xl border border-border bg-card p-5 transition-shadow hover:shadow-md"><div className="flex flex-col justify-between gap-4 md:flex-row"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusPill value={action.status} /><span className="mono text-[10px] text-muted-foreground">{action.actionType}</span></div><h2 className="mt-3 text-lg font-semibold">{action.title}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{action.rationale}</p><p className="mt-4 text-[11px] text-muted-foreground">Requested by {action.requestedBy} · {formatDateTime(action.requestedAt)} · Run <Link href={`/runs/${action.runId}/summary`} data-testid={`link-action-run-${action.id}`} className="mono text-[#627d18] hover:underline">{action.runId.slice(0, 12)}</Link></p>{action.decisionNote && <p className="mt-3 text-xs text-muted-foreground">Decision reason: {action.decisionNote}</p>}</div>{action.canDecide && <div className="flex shrink-0 items-start gap-2"><Button data-testid={`button-reject-action-${action.id}`} variant="outline" disabled={busyId === action.id} onClick={() => { setDecision({ actionId: action.id, value: 'reject' }); setReason(''); setError(''); }} className="border-[#dfb4ae] text-[#963f39]"><XCircle /> Reject</Button><Button data-testid={`button-approve-action-${action.id}`} disabled={busyId === action.id} onClick={() => { setDecision({ actionId: action.id, value: 'approve' }); setReason(''); setError(''); }} className="bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]"><Check /> Approve</Button></div>}</div>{decision?.actionId === action.id && <div className="mt-5 border-t border-border pt-5"><label className="block"><span className="mb-1.5 block text-xs font-semibold">{decision.value === 'approve' ? 'Approval' : 'Rejection'} reason</span><Textarea data-testid={`textarea-${decision.value}-reason-${action.id}`} value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={1000} placeholder="Record the evidence and reasoning behind this decision." /></label>{error && <p className="mt-2 text-xs text-destructive">{error}</p>}<div className="mt-3 flex gap-2"><Button data-testid={`button-confirm-${decision.value}-${action.id}`} disabled={busyId === action.id || !reason.trim()} onClick={submitDecision}>{busyId === action.id ? <Loader2 className="animate-spin" /> : <Check />} Confirm {decision.value === 'approve' ? 'approval' : 'rejection'}</Button><Button variant="outline" onClick={() => { setDecision(null); setReason(''); setError(''); }}>Cancel</Button></div></div>}</section>)}</div>}</PageFrame>;
+  return <PageFrame><PageIntro eyebrow="Governance" title="Action queue" detail="Review proposed follow-up actions before they affect an operational system." /><div className="mb-5 flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-semibold"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#f8edcf] text-xs text-[#8a5d17]">{actions.data?.filter((item) => item.status === 'requested').length || 0}</span>Awaiting decision</div><span className="text-xs text-muted-foreground">Independent administrator approval · all decisions are audited</span></div>{actions.isLoading ? <LoadingRows /> : actions.isError ? <ErrorState retry={() => actions.refetch()} /> : !actions.data?.length ? <EmptyState icon={ClipboardCheck} title="Queue is clear" detail="No follow-up actions are waiting for approval." /> : <div className="space-y-3">{actions.data.map((action) => <section key={action.id} data-testid={`card-action-${action.id}`} className="rounded-xl border border-border bg-card p-5 transition-shadow hover:shadow-md"><div className="flex flex-col justify-between gap-4 md:flex-row"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusPill value={action.status} /><span className="mono text-[10px] text-muted-foreground">{action.actionType}</span></div><h2 className="mt-3 text-lg font-semibold">{action.title}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{action.rationale}</p><p className="mt-4 text-[11px] text-muted-foreground">Requested by {action.requestedBy} · {formatDateTime(action.requestedAt)} · Run <Link href={`/runs/${action.runId}/summary`} data-testid={`link-action-run-${action.id}`} className="mono text-[#627d18] hover:underline">{action.runId.slice(0, 12)}</Link></p>{action.decisionNote && <p className="mt-3 text-xs text-muted-foreground">Decision reason: {action.decisionNote}</p>}</div>{action.canDecide && <div className="flex shrink-0 items-start gap-2"><Button data-testid={`button-reject-action-${action.id}`} variant="outline" disabled={busyId === action.id} onClick={() => { setDecision({ actionId: action.id, value: 'reject' }); setReason(''); setReasonError(''); setDecisionNetworkError(''); }} className="border-[#dfb4ae] text-[#963f39]"><XCircle /> Reject</Button><Button data-testid={`button-approve-action-${action.id}`} disabled={busyId === action.id} onClick={() => { setDecision({ actionId: action.id, value: 'approve' }); setReason(''); setReasonError(''); setDecisionNetworkError(''); }} className="bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]"><Check /> Approve</Button></div>}</div>{decision?.actionId === action.id && <div className="mt-5 border-t border-border pt-5"><label className="block"><span className="mb-1.5 block text-xs font-semibold">{decision.value === 'approve' ? 'Approval' : 'Rejection'} reason</span><Textarea data-testid={`textarea-${decision.value}-reason-${action.id}`} value={reason} onChange={(event) => { setReason(event.target.value); setReasonError(''); }} rows={3} maxLength={1000} placeholder="Record the evidence and reasoning behind this decision." /><FieldError message={reasonError} /></label>{decisionNetworkError && <div className="mt-3 rounded-lg border border-[#e7bdb9] bg-[#fdf0ee] p-3"><p className="text-xs text-destructive">{decisionNetworkError}</p><Button data-testid={`button-retry-${decision.value}-${action.id}`} size="sm" variant="outline" className="mt-2" onClick={submitDecision} disabled={busyId === action.id}><RefreshCw /> Retry decision</Button></div>}<div className="mt-3 flex gap-2"><Button data-testid={`button-confirm-${decision.value}-${action.id}`} disabled={busyId === action.id || !reason.trim()} onClick={submitDecision}>{busyId === action.id ? <Loader2 className="animate-spin" /> : <Check />} Confirm {decision.value === 'approve' ? 'approval' : 'rejection'}</Button><Button variant="outline" onClick={() => { setDecision(null); setReason(''); setReasonError(''); setDecisionNetworkError(''); }}>Cancel</Button></div></div>}</section>)}</div>}</PageFrame>;
 }
 
 function AuditPage() {
@@ -443,12 +553,41 @@ function SettingsPage() {
   const [approval, setApproval] = useState(true);
   const [saved, setSaved] = useState(false);
   const [initialized, setInitialized] = useState(false);
-  if (settings.data && !initialized) { setName(settings.data.name); setRetention(String(settings.data.retentionDays)); setApproval(settings.data.requireApproval); setInitialized(true); }
-  const save = () => update.mutate({ data: { name, retentionDays: Number(retention), requireApproval: approval } }, { onSuccess: (data) => { queryClient.setQueryData(getGetSettingsQueryKey(), data); setSaved(true); setTimeout(() => setSaved(false), 2200); } });
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; retention?: string }>({});
+  const [networkError, setNetworkError] = useState('');
+  useEffect(() => {
+    if (settings.data && !initialized) {
+      setName(settings.data.name);
+      setRetention(String(settings.data.retentionDays));
+      setApproval(settings.data.requireApproval);
+      setInitialized(true);
+    }
+  }, [initialized, settings.data]);
+  const save = () => {
+    const errors: { name?: string; retention?: string } = {};
+    const cleanName = name.trim();
+    const retentionDays = Number(retention);
+    if (!cleanName) errors.name = 'Enter an organisation name.';
+    else if (cleanName.length > 120) errors.name = 'Keep the name to 120 characters or fewer.';
+    if (!retention.trim()) errors.retention = 'Enter a retention period.';
+    else if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) errors.retention = 'Enter a whole number from 1 to 3,650.';
+    setFieldErrors(errors);
+    setNetworkError('');
+    setSaved(false);
+    if (Object.keys(errors).length > 0) return;
+    update.mutate({ data: { name: cleanName, retentionDays, requireApproval: approval } }, {
+      onSuccess: (data) => {
+        queryClient.setQueryData(getGetSettingsQueryKey(), data);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2200);
+      },
+      onError: () => setNetworkError('Settings could not be saved. Your changes have been kept.'),
+    });
+  };
   if (user && user.role !== 'administrator') {
-    return <PageFrame><PageIntro eyebrow="Organisation / read-only" title="Settings" detail="Inspect the organisation controls that govern evidence and approvals." action={<div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"><LockKeyhole className="h-3.5 w-3.5" /> Read-only view</div>} />{settings.isLoading ? <LoadingRows count={3} /> : settings.isError ? <ErrorState retry={() => settings.refetch()} /> : <div className="grid max-w-3xl gap-4 sm:grid-cols-2"><section className="rounded-xl border border-border bg-card p-6"><p className="text-xs font-semibold text-muted-foreground">Organisation</p><p className="mt-2 text-lg font-semibold">{settings.data?.name}</p><p className="mono mt-2 text-xs text-muted-foreground">{settings.data?.code}</p></section><section className="rounded-xl border border-border bg-card p-6"><p className="text-xs font-semibold text-muted-foreground">Governance controls</p><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Retention</dt><dd className="font-semibold">{settings.data?.retentionDays} days</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Approval required</dt><dd className="font-semibold">{settings.data?.requireApproval ? 'Yes' : 'No'}</dd></div></dl></section></div>}</PageFrame>;
+    return <PageFrame><PageIntro eyebrow="Organisation / read-only" title="Settings" detail="Inspect the organisation controls that govern evidence and approvals." action={<div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"><LockKeyhole className="h-3.5 w-3.5" /> Read-only view</div>} />{settings.isLoading ? <LoadingRows count={3} /> : settings.isError ? <ErrorState retry={() => settings.refetch()} /> : !settings.data ? <EmptyState title="Settings unavailable" detail="No organisation settings were returned." /> : <div className="grid max-w-3xl gap-4 sm:grid-cols-2"><section className="rounded-xl border border-border bg-card p-6"><p className="text-xs font-semibold text-muted-foreground">Organisation</p><p className="mt-2 text-lg font-semibold">{settings.data.name}</p><p className="mono mt-2 text-xs text-muted-foreground">{settings.data.code}</p></section><section className="rounded-xl border border-border bg-card p-6"><p className="text-xs font-semibold text-muted-foreground">Governance controls</p><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Retention</dt><dd className="font-semibold">{settings.data.retentionDays} days</dd></div><div className="flex justify-between gap-4"><dt className="text-muted-foreground">Approval required</dt><dd className="font-semibold">{settings.data.requireApproval ? 'Yes' : 'No'}</dd></div></dl></section></div>}</PageFrame>;
   }
-  return <PageFrame><PageIntro eyebrow="Organisation / administration" title="Settings" detail="Control how evidence is retained and how follow-up work is approved." />{settings.isLoading ? <LoadingRows count={3} /> : settings.isError ? <ErrorState retry={() => settings.refetch()} /> : <div className="grid max-w-4xl gap-6 lg:grid-cols-[1.2fr_.8fr]"><section className="rounded-xl border border-border bg-card p-6"><div className="mb-7 border-b border-border pb-5"><h2 className="font-semibold">Organisation profile</h2><p className="mt-1 text-xs text-muted-foreground">These identifiers appear in the audit trail and import context.</p></div><div className="space-y-5"><label className="block"><span className="mb-1.5 block text-xs font-semibold">Organisation name</span><Input data-testid="input-organisation-name" value={name} onChange={(e) => setName(e.target.value)} /></label><div><span className="mb-1.5 block text-xs font-semibold">Organisation code</span><div data-testid="text-organisation-code" className="flex h-9 items-center rounded-md border border-border bg-secondary/60 px-3 mono text-xs text-muted-foreground">{settings.data?.code}</div><p className="mt-1.5 text-[11px] text-muted-foreground">Code is assigned at setup and cannot be changed.</p></div><label className="block"><span className="mb-1.5 block text-xs font-semibold">Evidence retention</span><div className="flex items-center gap-2"><Input data-testid="input-retention-days" type="number" min={1} max={3650} value={retention} onChange={(e) => setRetention(e.target.value)} /><span className="text-xs text-muted-foreground">days</span></div></label><div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-secondary/35 p-4"><div><p className="text-sm font-semibold">Require approval for actions</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Analysts can request follow-up work, but administrators must approve it before execution.</p></div><button data-testid="button-toggle-approval" onClick={() => setApproval(!approval)} className={`relative mt-0.5 h-6 w-11 rounded-full transition-colors ${approval ? 'bg-[#718e1f]' : 'bg-muted-foreground/30'}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-card transition-transform ${approval ? 'left-6' : 'left-1'}`} /></button></div></div><div className="mt-8 flex items-center gap-3"><Button data-testid="button-save-settings" disabled={update.isPending} onClick={save} className="bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{update.isPending ? <Loader2 className="animate-spin" /> : <Check />} Save changes</Button>{saved && <span data-testid="text-settings-saved" className="text-xs font-medium text-[#627d18]">Changes saved</span>}</div></section><section className="rounded-xl border border-border bg-[#eaf0d0] p-6"><ShieldCheck className="h-5 w-5 text-[#627d18]" /><h2 className="mt-5 text-lg font-semibold text-[#26340f]">Controls that hold up</h2><p className="mt-2 text-sm leading-6 text-[#5d6a35]">Retention and approval settings apply across this organisation. Changes are written to the audit trail with your identity and timestamp.</p><div className="mt-8 space-y-3 border-t border-[#cbdc9c] pt-5"><div className="flex items-center justify-between text-xs"><span className="text-[#5d6a35]">Approval workflow</span><span className="font-semibold text-[#52651a]">{approval ? 'Enforced' : 'Optional'}</span></div><div className="flex items-center justify-between text-xs"><span className="text-[#5d6a35]">Retention window</span><span className="font-semibold text-[#52651a]">{retention || '—'} days</span></div></div></section></div>}</PageFrame>;
+  return <PageFrame><PageIntro eyebrow="Organisation / administration" title="Settings" detail="Control how evidence is retained and how follow-up work is approved." />{settings.isLoading ? <LoadingRows count={3} /> : settings.isError ? <ErrorState retry={() => settings.refetch()} /> : !settings.data ? <EmptyState title="Settings unavailable" detail="No organisation settings were returned." /> : <div className="grid max-w-4xl gap-6 lg:grid-cols-[1.2fr_.8fr]"><section className="rounded-xl border border-border bg-card p-6"><div className="mb-7 border-b border-border pb-5"><h2 className="font-semibold">Organisation profile</h2><p className="mt-1 text-xs text-muted-foreground">These identifiers appear in the audit trail and import context.</p></div><div className="space-y-5"><label className="block"><span className="mb-1.5 block text-xs font-semibold">Organisation name</span><Input data-testid="input-organisation-name" maxLength={121} value={name} onChange={(e) => { setName(e.target.value); setFieldErrors((value) => ({ ...value, name: undefined })); }} /><FieldError message={fieldErrors.name} /></label><div><span className="mb-1.5 block text-xs font-semibold">Organisation code</span><div data-testid="text-organisation-code" className="flex h-9 items-center rounded-md border border-border bg-secondary/60 px-3 mono text-xs text-muted-foreground">{settings.data.code}</div><p className="mt-1.5 text-[11px] text-muted-foreground">Code is assigned at setup and cannot be changed.</p></div><label className="block"><span className="mb-1.5 block text-xs font-semibold">Evidence retention</span><div className="flex items-center gap-2"><Input data-testid="input-retention-days" type="number" min={1} max={3650} step={1} value={retention} onChange={(e) => { setRetention(e.target.value); setFieldErrors((value) => ({ ...value, retention: undefined })); }} /><span className="text-xs text-muted-foreground">days</span></div><FieldError message={fieldErrors.retention} /></label><div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-secondary/35 p-4"><div><p className="text-sm font-semibold">Require approval for actions</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Analysts can request follow-up work, but administrators must approve it before execution.</p></div><button data-testid="button-toggle-approval" onClick={() => setApproval(!approval)} className={`relative mt-0.5 h-6 w-11 rounded-full transition-colors ${approval ? 'bg-[#718e1f]' : 'bg-muted-foreground/30'}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-card transition-transform ${approval ? 'left-6' : 'left-1'}`} /></button></div></div>{networkError && <div className="mt-5 rounded-lg border border-[#e7bdb9] bg-[#fdf0ee] p-3"><p className="text-xs text-destructive">{networkError}</p><Button data-testid="button-retry-settings" size="sm" variant="outline" className="mt-2" disabled={update.isPending} onClick={save}><RefreshCw /> Retry save</Button></div>}<div className="mt-8 flex items-center gap-3"><Button data-testid="button-save-settings" disabled={update.isPending} onClick={save} className="bg-[#d9f06c] text-[#26340f] hover:bg-[#c9e05d]">{update.isPending ? <Loader2 className="animate-spin" /> : <Check />} Save changes</Button>{saved && <span data-testid="text-settings-saved" className="text-xs font-medium text-[#627d18]">Changes saved</span>}</div></section><section className="rounded-xl border border-border bg-[#eaf0d0] p-6"><ShieldCheck className="h-5 w-5 text-[#627d18]" /><h2 className="mt-5 text-lg font-semibold text-[#26340f]">Controls that hold up</h2><p className="mt-2 text-sm leading-6 text-[#5d6a35]">Retention and approval settings apply across this organisation. Changes are written to the audit trail with your identity and timestamp.</p><div className="mt-8 space-y-3 border-t border-[#cbdc9c] pt-5"><div className="flex items-center justify-between text-xs"><span className="text-[#5d6a35]">Approval workflow</span><span className="font-semibold text-[#52651a]">{approval ? 'Enforced' : 'Optional'}</span></div><div className="flex items-center justify-between text-xs"><span className="text-[#5d6a35]">Retention window</span><span className="font-semibold text-[#52651a]">{retention || '—'} days</span></div></div></section></div>}</PageFrame>;
 }
 
 function SignInPage() {
@@ -482,20 +621,32 @@ function LandingPage() {
 function ProtectedRoutes() {
   const user = useGetCurrentUser({ query: { queryKey: getGetCurrentUserQueryKey() } });
   if (user.isLoading) return <div className="min-h-[100dvh] bg-background p-6"><div className="mx-auto max-w-5xl"><div className="skeleton h-10 w-40 rounded-lg" /><div className="mt-16 grid gap-4 md:grid-cols-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="skeleton h-28 rounded-xl" />)}</div></div></div>;
-  return <Shell user={user.data}>{<Switch><Route path="/dashboard" component={DashboardPage} /><Route path="/runs/new" component={NewRunPage} /><Route path="/runs/:runId/exceptions" component={ExceptionsPage} /><Route path="/runs/:runId/summary" component={SummaryPage} /><Route path="/runs" component={RunsPage} /><Route path="/actions/queue" component={ActionQueuePage} /><Route path="/audit" component={AuditPage} /><Route path="/settings" component={SettingsPage} /><Route><Redirect to="/dashboard" /></Route></Switch>}</Shell>;
+  if (user.isError) return <div className="min-h-[100dvh] bg-background p-6"><div className="mx-auto max-w-2xl pt-16"><ErrorState message="We could not load your organisation access." retry={() => void user.refetch()} /></div></div>;
+  if (!user.data) return <div className="min-h-[100dvh] bg-background p-6"><div className="mx-auto max-w-2xl pt-16"><EmptyState icon={LockKeyhole} title="No organisation access" detail="Your signed-in account is not currently provisioned for an organisation." /></div></div>;
+  return <Shell user={user.data}><Switch>
+    <Route path="/dashboard"><ScreenBoundary screen="Dashboard"><DashboardPage /></ScreenBoundary></Route>
+    <Route path="/runs/new"><ScreenBoundary screen="New import"><NewRunPage /></ScreenBoundary></Route>
+    <Route path="/runs/:runId/exceptions"><ScreenBoundary screen="Run exceptions"><ExceptionsPage /></ScreenBoundary></Route>
+    <Route path="/runs/:runId/summary"><ScreenBoundary screen="Evidence summary"><SummaryPage /></ScreenBoundary></Route>
+    <Route path="/runs"><ScreenBoundary screen="Import runs"><RunsPage /></ScreenBoundary></Route>
+    <Route path="/actions/queue"><ScreenBoundary screen="Action queue"><ActionQueuePage /></ScreenBoundary></Route>
+    <Route path="/audit"><ScreenBoundary screen="Audit trail"><AuditPage /></ScreenBoundary></Route>
+    <Route path="/settings"><ScreenBoundary screen="Settings"><SettingsPage /></ScreenBoundary></Route>
+    <Route><Redirect to="/dashboard" /></Route>
+  </Switch></Shell>;
 }
 
 function Router() {
   const [location] = useLocation();
   const { isLoaded, isSignedIn } = useAuth();
   if (!isLoaded) {
-    return <div className="min-h-[100dvh] bg-background" />;
+    return <div className="min-h-[100dvh] bg-background p-6"><div className="mx-auto max-w-5xl pt-16"><LoadingRows count={5} /></div></div>;
   }
   if (location === '/' || location === '') {
-    return isSignedIn ? <Redirect to="/dashboard" /> : <LandingPage />;
+    return isSignedIn ? <Redirect to="/dashboard" /> : <ScreenBoundary screen="Welcome"><LandingPage /></ScreenBoundary>;
   }
-  if (location.startsWith('/sign-in')) return <SignInPage />;
-  if (location.startsWith('/sign-up')) return <SignUpPage />;
+  if (location.startsWith('/sign-in')) return <ScreenBoundary screen="Sign in"><SignInPage /></ScreenBoundary>;
+  if (location.startsWith('/sign-up')) return <ScreenBoundary screen="Sign up"><SignUpPage /></ScreenBoundary>;
   if (!isSignedIn) return <Redirect to="/" />;
   return <ProtectedRoutes />;
 }
