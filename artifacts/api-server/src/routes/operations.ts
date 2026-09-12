@@ -53,10 +53,9 @@ import {
   requireOperationsAuth,
   requireRole,
 } from "../lib/auth";
-import {
-  PipelineValidationError,
-  processRunForOrganisation,
-} from "../lib/processing";
+import { PipelineValidationError } from "../lib/importValidation";
+import { processRunForOrganisation } from "../lib/processing";
+import { buildRunDetail } from "../lib/runResponses";
 
 const router: IRouter = Router();
 router.use(requireOperationsAuth);
@@ -311,36 +310,8 @@ router.get("/runs/:runId", async (req, res): Promise<void> => {
       )
       .orderBy(desc(auditEventsTable.createdAt)),
   ]);
-  const runAttempts = attempts.map((attempt) => {
-    const metadata =
-      attempt.metadata && typeof attempt.metadata === "object"
-        ? (attempt.metadata as Record<string, unknown>)
-        : {};
-    return {
-      id: attempt.id,
-      actor: attempt.actor,
-      startedAt:
-        typeof metadata.startedAt === "string"
-          ? metadata.startedAt
-          : attempt.createdAt,
-      durationMs:
-        typeof metadata.durationMs === "number" ? metadata.durationMs : undefined,
-      outcome:
-        typeof metadata.status === "string"
-          ? metadata.status
-          : attempt.action === "run.failed"
-            ? "failed"
-            : "succeeded",
-      reason: typeof metadata.reason === "string" ? metadata.reason : null,
-    };
-  });
   res.json(
-    GetRunResponse.parse({
-      ...runView(run),
-      acceptedRows: rows.filter((row) => row.accepted),
-      rejectedRows: rows.filter((row) => !row.accepted),
-      attempts: runAttempts,
-    }),
+    GetRunResponse.parse(buildRunDetail(runView(run), rows, attempts)),
   );
 });
 

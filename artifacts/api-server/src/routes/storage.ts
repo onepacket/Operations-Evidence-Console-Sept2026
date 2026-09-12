@@ -15,15 +15,10 @@ import {
   getOperationsContext,
   requireOperationsAuth,
 } from "../lib/auth";
+import { validateUploadMetadata } from "../lib/importValidation";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
-const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
-const ACCEPTED_UPLOAD_TYPES = new Set([
-  "text/csv",
-  "application/json",
-  "application/vnd.api+json",
-]);
 
 router.use(requireOperationsAuth);
 
@@ -46,17 +41,9 @@ router.post(
 
     try {
       const { name, size, contentType } = parsed.data;
-      const extension = name.toLowerCase().split(".").pop();
-      const isAcceptedType =
-        ACCEPTED_UPLOAD_TYPES.has(contentType) ||
-        (contentType === "application/octet-stream" &&
-          (extension === "csv" || extension === "json"));
-      if (!isAcceptedType) {
-        res.status(415).json({ error: "Only CSV and JSON files are supported." });
-        return;
-      }
-      if (size > MAX_UPLOAD_BYTES) {
-        res.status(413).json({ error: "Files must be 250 MB or smaller." });
+      const validationError = validateUploadMetadata({ name, size, contentType });
+      if (validationError) {
+        res.status(validationError.status).json({ error: validationError.error });
         return;
       }
 
